@@ -1,742 +1,462 @@
+import express from "express";
+import multer from "multer";
+import XLSX from "xlsx";
+import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
+import { pool, query, tx, initSchema } from "./db/index.js";
 
-<!DOCTYPE html>
-<html lang="it">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Magazzino Uniformi</title>
-<style>
-  :root{
-    --ink:#1c2321;--paper:#f6f4ee;--panel:#fff;--line:#d9d5c9;
-    --brass:#b07c3f;--brass-dk:#8a5f2c;--sage:#5f7355;--alert:#a6432f;--muted:#6d6a60;
-    --shadow:0 1px 0 rgba(0,0,0,.04),0 8px 24px -18px rgba(0,0,0,.35);--radius:10px;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+app.use(express.json({ limit: "5mb" }));
+
+// CORS aperto (frontend può stare su GitHub Pages su dominio diverso)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+/* ---------------- autenticazione ----------------
+   Login semplice a utente/password unici (default admin/admin).
+   Personalizzabili con le variabili AUTH_USER / AUTH_PASS su Railway. */
+const AUTH_USER = process.env.AUTH_USER || "admin";
+const AUTH_PASS = process.env.AUTH_PASS || "admin";
+// segreto per firmare i token; se non impostato ne genera uno a runtime
+const SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString("hex");
+
+function makeToken(user) {
+  const payload = Buffer.from(JSON.stringify({ u: user, t: Date.now() })).toString("base64url");
+  const sig = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+  return payload + "." + sig;
+}
+function validToken(token) {
+  if (!token || !token.includes(".")) return false;
+  const [payload, sig] = token.split(".");
+  const expected = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+  if (sig !== expected) return false;
+  try {
+    const { t } = JSON.parse(Buffer.from(payload, "base64url").toString());
+    return (Date.now() - t) < 1000 * 60 * 60 * 24 * 30; // valido 30 giorni
+  } catch { return false; }
+}
+// protegge tutte le API tranne login e health
+function requireAuth(req, res, next) {
+  const h = req.headers.authorization || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (validToken(token)) return next();
+  res.status(401).json({ error: "Non autorizzato" });
+}
+
+app.post("/api/login", (req, res) => {
+  const { user, pass } = req.body || {};
+  if (user === AUTH_USER && pass === AUTH_PASS) {
+    return res.json({ token: makeToken(user), user });
   }
-  *{box-sizing:border-box}html,body{margin:0;height:100%}
-  body{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
-  button{font-family:inherit;cursor:pointer}input,select{font-family:inherit}
-  header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:20;box-shadow:var(--shadow);flex-wrap:wrap}
-  .brand{font-size:22px;font-weight:600}.brand .dot{color:var(--brass)}
-  .conn{font-family:ui-sans-serif,sans-serif;font-size:11.5px;display:flex;align-items:center;gap:6px;color:var(--muted)}
-  .dotstat{width:8px;height:8px;border-radius:50%;background:#c9c4b6}
-  .dotstat.ok{background:var(--sage)}.dotstat.bad{background:var(--alert)}
-  nav{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
-  nav button{font-family:ui-sans-serif,sans-serif;font-size:13px;border:1px solid transparent;background:transparent;color:var(--muted);padding:9px 14px;border-radius:8px;transition:.15s}
-  nav button:hover{color:var(--ink);background:#efece3}nav button.on{background:var(--ink);color:var(--paper)}
-  main{padding:20px;max-width:1200px;margin:0 auto}
-  .view{display:none}.view.on{display:block;animation:fade .22s ease}
-  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-  @media(prefers-reduced-motion:reduce){.view.on{animation:none}}
-  .strip{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;min-width:150px;flex:1;box-shadow:var(--shadow)}
-  .stat .k{font-family:ui-sans-serif,sans-serif;font-size:11px;letter-spacing:.4px;color:var(--muted)}
-  .stat .v{font-size:24px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
-  .stat.mag .v{color:var(--sage)}.stat.inc .v{color:var(--brass)}
-  .bar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-  .search{flex:1;min-width:180px;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 12px}
-  .search input{border:none;outline:none;background:transparent;padding:11px 0;width:100%;font-size:15px}
-  select.cat{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px}
-  .btn{font-family:ui-sans-serif,sans-serif;font-size:14px;font-weight:600;border:none;border-radius:9px;padding:11px 20px;color:#fff;background:var(--ink)}
-  .btn.brass{background:var(--brass)}.btn.brass:hover{background:var(--brass-dk)}
-  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}.btn.ghost:hover{background:#efece3}
-  .btn.sm{padding:7px 13px;font-size:13px}.btn:disabled{opacity:.5;cursor:not-allowed}
-  .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:auto;box-shadow:var(--shadow)}
-  table{width:100%;border-collapse:collapse}
-  thead th{font-family:ui-sans-serif,sans-serif;font-size:11px;letter-spacing:.4px;color:var(--muted);text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:600;background:#faf8f2;position:sticky;top:0}
-  th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
-  tbody td{padding:10px 14px;border-bottom:1px solid #efece3;font-size:14.5px}
-  tbody tr:last-child td{border-bottom:none}tbody tr:hover{background:#faf8f2}
-  .catpill{display:inline-block;font-family:ui-sans-serif,sans-serif;font-size:11px;padding:3px 9px;border-radius:20px;background:#eef0ea;color:var(--sage);border:1px solid #dfe3d8}
-  .lowstock{color:var(--alert);font-weight:600}
-  .edit-in{width:88px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;background:#fff}
-  .edit-in.txt{text-align:left;width:100%}
-  .rowbtn{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;font-size:12px;color:var(--muted)}
-  .rowbtn:hover{border-color:var(--alert);color:var(--alert)}
-  .empty{padding:36px;text-align:center;color:var(--muted)}
-  .kindpill{font-family:ui-sans-serif,sans-serif;font-size:11px;padding:3px 9px;border-radius:20px;text-transform:capitalize}
-  .k-vendita{background:#f3e7e3;color:var(--alert)}.k-import{background:#e9efe6;color:var(--sage)}
-  .k-carico{background:#e9efe6;color:var(--sage)}.k-rettifica{background:#f0ead9;color:var(--brass-dk)}.k-scarico{background:#f3e7e3;color:var(--alert)}
-  .qplus{color:var(--sage);font-weight:600}.qminus{color:var(--alert);font-weight:600}
-  /* cassa */
-  .cassa{display:grid;grid-template-columns:1fr 370px;gap:18px;align-items:start}
-  @media(max-width:840px){.cassa{grid-template-columns:1fr}}
-  .prods{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow)}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-top:12px;max-height:60vh;overflow:auto}
-  .card{border:1px solid var(--line);border-radius:9px;padding:11px;background:#fff;text-align:left;transition:.12s;display:flex;flex-direction:column;gap:5px;min-height:92px}
-  .card:hover{border-color:var(--brass);transform:translateY(-1px)}
-  .card:disabled{opacity:.45;cursor:not-allowed;transform:none;border-color:var(--line)}
-  .card .nm{font-size:13.5px;line-height:1.25;font-weight:500}.card .pr{font-family:ui-sans-serif,sans-serif;font-size:15px;font-weight:700;color:var(--brass);margin-top:auto}
-  .card .st{font-family:ui-sans-serif,sans-serif;font-size:11px;color:var(--muted)}
-  .receipt{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);position:sticky;top:80px;overflow:hidden}
-  .receipt h3{margin:0;padding:15px 18px;border-bottom:1px solid var(--line);font-size:17px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
-  .receipt h3 .clr{font-family:ui-sans-serif,sans-serif;font-size:12px;color:var(--muted);background:none;border:none}.receipt h3 .clr:hover{color:var(--alert)}
-  .lines{max-height:32vh;overflow:auto}
-  .line{display:flex;align-items:center;gap:8px;padding:10px 18px;border-bottom:1px dashed #e6e2d7}
-  .line .lnm{flex:1;font-size:14px}.line .lpr{font-family:ui-sans-serif,sans-serif;font-size:12.5px;color:var(--muted)}
-  .qtybox{display:flex;align-items:center;gap:6px}
-  .qtybox button{width:24px;height:24px;border:1px solid var(--line);background:#fff;border-radius:6px;font-size:15px;color:var(--ink)}
-  .qtybox button:hover{border-color:var(--brass);color:var(--brass)}
-  .qtybox span{min-width:20px;text-align:center;font-family:ui-sans-serif,sans-serif;font-size:14px}
-  .llt{font-family:ui-sans-serif,sans-serif;font-size:14px;font-weight:600;min-width:60px;text-align:right;font-variant-numeric:tabular-nums}
-  .cartempty{padding:32px 18px;text-align:center;color:var(--muted);font-family:ui-sans-serif,sans-serif;font-size:13px}
-  .tots{padding:14px 18px;border-top:1px solid var(--line);font-family:ui-sans-serif,sans-serif}
-  .totrow{display:flex;justify-content:space-between;align-items:center;margin:6px 0;font-size:14px}
-  .totrow.big{font-size:22px;font-weight:700;margin-top:8px}.totrow .lbl{color:var(--muted)}
-  .money-in{width:92px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;text-align:right;font-size:14px;font-variant-numeric:tabular-nums}
-  .resto{color:var(--sage);font-weight:700}.resto.neg{color:var(--alert)}
-  .pay{width:100%;margin-top:12px;font-size:15px;padding:13px}
-  .printnote{font-family:ui-sans-serif,sans-serif;font-size:11px;color:var(--muted);line-height:1.4;margin-top:10px;text-align:center}
-  /* anteprima scontrino */
-  #preview{position:fixed;inset:0;z-index:80;background:rgba(28,35,33,.55);display:none;align-items:center;justify-content:center;padding:20px}
-  #preview.show{display:flex;animation:fade .18s ease}
-  .preview-card{background:var(--panel);border-radius:14px;box-shadow:0 20px 60px -20px rgba(0,0,0,.6);width:100%;max-width:340px;display:flex;flex-direction:column;max-height:90vh;overflow:hidden}
-  .preview-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);font-weight:600;font-size:16px}
-  .preview-x{border:none;background:none;font-size:16px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px}
-  .preview-x:hover{background:#efece3;color:var(--ink)}
-  .preview-scroll{overflow:auto;padding:20px;background:#e8e5dd;display:flex;justify-content:center}
-  .preview-roll{background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.25);border-radius:2px}
-  /* carta 58mm resa a schermo, stesse regole della stampa */
-  .preview-paper{width:54mm;padding:2mm 3mm 4mm;font-family:"Courier New","Cascadia Mono",monospace;color:#000;font-size:11px;line-height:1.35;box-sizing:border-box}
-  .preview-paper .c{text-align:center}
-  .preview-paper .big{font-size:15px;font-weight:bold;letter-spacing:.5px}
-  .preview-paper .sm{font-size:9.5px}
-  .preview-paper .r{display:flex;justify-content:space-between;gap:4px}
-  .preview-paper .r .val{white-space:nowrap}
-  .preview-paper .it{margin:1.5px 0}
-  .preview-paper .it .nm{word-break:break-word}
-  .preview-paper .tot{font-size:13px;font-weight:bold}
-  .preview-paper hr{border:none;border-top:1px dashed #000;margin:4px 0}
-  .preview-paper .sp{height:3mm}
-  .preview-actions{display:flex;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
-  .preview-actions .btn{flex:1}
-  /* dialog vendite/storno */
-  #saledlg{position:fixed;inset:0;z-index:85;background:rgba(28,35,33,.55);display:none;align-items:center;justify-content:center;padding:20px}
-  #saledlg.show{display:flex;animation:fade .18s ease}
-  .sd-scroll{overflow:auto;padding:16px 18px;max-height:56vh}
-  .sd-reason{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;font-family:ui-sans-serif,sans-serif}
-  .sd-line{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #efece3;font-family:ui-sans-serif,sans-serif}
-  .sd-line:last-child{border-bottom:none}
-  .sd-line .nm{flex:1;font-size:14px}
-  .sd-line .meta{font-size:12px;color:var(--muted)}
-  .sd-line .lt{font-size:14px;font-variant-numeric:tabular-nums;min-width:60px;text-align:right}
-  .sd-ret{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 9px;font-size:12px;color:var(--brass-dk)}
-  .sd-ret:hover{border-color:var(--brass);background:#fffdf8}
-  .sd-ret:disabled{opacity:.4;cursor:not-allowed}
-  .sd-tot{font-family:ui-sans-serif,sans-serif;font-size:15px;font-weight:700;display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line)}
-  .badge{font-family:ui-sans-serif,sans-serif;font-size:11px;padding:3px 9px;border-radius:20px}
-  .badge.ok{background:#eef0ea;color:var(--sage)}
-  .badge.void{background:#f3e7e3;color:var(--alert)}
-  .badge.part{background:#f0ead9;color:var(--brass-dk)}
-  .k-storno{background:#f3e7e3;color:var(--alert)}
-  /* import */
-  .panelbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);max-width:640px}
-  .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:34px;text-align:center;margin:16px 0}
-  .drop.hot{border-color:var(--brass);background:#fffdf8}
-  .radio{display:flex;gap:10px;margin:14px 0;flex-wrap:wrap}
-  .radio label{flex:1;min-width:200px;border:1px solid var(--line);border-radius:9px;padding:12px 14px;cursor:pointer;font-family:ui-sans-serif,sans-serif;font-size:13px;line-height:1.4}
-  .radio label.sel{border-color:var(--brass);background:#fffdf8}
-  .radio b{display:block;font-size:14px;margin-bottom:3px;color:var(--ink)}
-  .importlog{margin-top:16px;font-family:ui-sans-serif,sans-serif;font-size:14px;background:#f2f5f0;border:1px solid #dfe3d8;border-radius:9px;padding:14px;color:var(--sage);display:none}
-  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--paper);padding:13px 20px;border-radius:10px;font-family:ui-sans-serif,sans-serif;font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:50;box-shadow:0 10px 30px -12px rgba(0,0,0,.5);max-width:90vw}
-  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-  #toast.err{background:var(--alert)}
-  #printarea{display:none}
-  @media print{
-    /* Rotolo termico 58mm: area stampabile reale ~48mm, nessun margine */
-    @page{ size:58mm auto; margin:0; }
-    html,body{ margin:0!important; padding:0!important; background:#fff; }
-    body *{visibility:hidden}
-    #printarea,#printarea *{visibility:visible}
-    #printarea{
-      display:block;position:absolute;left:0;top:0;
-      width:54mm;padding:2mm 3mm 4mm;
-      font-family:"Courier New","Cascadia Mono",monospace;
-      color:#000;font-size:11px;line-height:1.35;
-      -webkit-print-color-adjust:exact;print-color-adjust:exact;
+  res.status(401).json({ error: "Utente o password errati" });
+});
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+/* ---------------- helpers ---------------- */
+const NORM = s => (s || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
+function pickCol(headers, keys) {
+  for (const k of keys) {
+    const i = headers.findIndex(h => NORM(h).includes(k));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+function parseNum(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return v;
+  let s = v.toString().trim().replace(/[^0-9.,\-]/g, "");
+  if (s === "") return 0;
+  // Se ci sono sia '.' che ',', l'ultimo separatore è quello decimale (formato IT: 1.234,56)
+  if (s.includes(".") && s.includes(",")) {
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) s = s.replace(/\./g, "").replace(",", ".");
+    else s = s.replace(/,/g, "");
+  } else if (s.includes(",")) {
+    s = s.replace(",", ".");            // solo virgola -> decimale
+  }
+  return parseFloat(s) || 0;            // solo punto -> già decimale (es. "9.8")
+}
+// Categoria annidata Danea "Principale » Sotto » ..." -> solo il primo livello
+function mainCategory(v) {
+  if (!v) return "Senza categoria";
+  const first = v.toString().split("»")[0].trim();
+  return first || "Senza categoria";
+}
+// La colonna senza intestazione di Danea è "Nascosto?" (valori Sì/No)
+function isHidden(v) {
+  if (v == null) return false;
+  const s = v.toString().trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // rimuove accenti: sì -> si
+  return s === "si" || s === "s" || s === "yes" || s === "y" || s === "true" || s === "x" || s === "1";
+}
+async function nextBatch(client) {
+  const r = await client.query("SELECT nextval('batch_seq') AS b");
+  return Number(r.rows[0].b);
+}
+
+/* ---------------- health ---------------- */
+app.get("/api/health", async (_req, res) => {
+  try { await query("SELECT 1"); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Da qui in poi tutte le rotte /api richiedono login.
+app.use("/api", requireAuth);
+
+/* ---------------- prodotti ---------------- */
+app.get("/api/products", async (_req, res) => {
+  const r = await query(
+    "SELECT * FROM products WHERE archived = FALSE ORDER BY descr ASC");
+  res.json(r.rows);
+});
+
+app.post("/api/products", async (req, res) => {
+  const { code = "", descr, category = "Senza categoria", cost = 0, price = 0, stock = 0 } = req.body;
+  if (!descr) return res.status(400).json({ error: "Descrizione obbligatoria" });
+  try {
+    const out = await tx(async (c) => {
+      const r = await c.query(
+        `INSERT INTO products (code, descr, category, cost, price, stock)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [code || null, descr, category, cost, price, stock]);
+      const p = r.rows[0];
+      if (Number(stock) !== 0) {
+        await c.query(
+          `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note)
+           VALUES ($1,$2,$3,'carico',$4,$5,$6,$7,'Creazione prodotto')`,
+          [p.id, p.code, p.descr, stock, stock, cost, price]);
+      }
+      return p;
+    });
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/products/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const { code, descr, category, cost, price, stock } = req.body;
+  try {
+    const out = await tx(async (c) => {
+      const cur = (await c.query("SELECT * FROM products WHERE id=$1", [id])).rows[0];
+      if (!cur) throw new Error("Prodotto non trovato");
+      const newStock = stock == null ? Number(cur.stock) : Number(stock);
+      const r = await c.query(
+        `UPDATE products SET
+           code=$1, descr=$2, category=$3, cost=$4, price=$5, stock=$6, updated_at=now()
+         WHERE id=$7 RETURNING *`,
+        [ code ?? cur.code, descr ?? cur.descr, category ?? cur.category,
+          cost ?? cur.cost, price ?? cur.price, newStock, id ]);
+      const p = r.rows[0];
+      // se cambia la giacenza manualmente -> movimento di rettifica
+      const delta = newStock - Number(cur.stock);
+      if (delta !== 0) {
+        await c.query(
+          `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note)
+           VALUES ($1,$2,$3,'rettifica',$4,$5,$6,$7,'Modifica manuale')`,
+          [p.id, p.code, p.descr, delta, newStock, p.cost, p.price]);
+      }
+      return p;
+    });
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/products/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    await query("UPDATE products SET archived=TRUE, updated_at=now() WHERE id=$1", [id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/* ---------------- import Danea (Excel) ----------------
+   Upsert per codice; crea movimenti 'import' con il delta di giacenza. */
+app.post("/api/import", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Nessun file" });
+  // mode: 'sync' (allinea giacenza al file) | 'add' (somma le giacenze del file)
+  const mode = (req.body.mode || "sync");
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
+
+    let hIdx = rows.findIndex(r => r.filter(c => c !== "").length >= 2);
+    if (hIdx < 0) hIdx = 0;
+    const headers = rows[hIdx];
+    // "cod. a barre" contiene "cod": lo cerco PRIMA e lo escludo dal match del codice articolo
+    const cBar = pickCol(headers, ["codabarre", "codiceabarre", "barcode", "ean", "abarre"]);
+    const cDesc = pickCol(headers, ["descrizione", "descr", "articolo", "nome", "prodotto"]);
+    let cCode = -1;
+    for (const k of ["codice", "cod"]) {
+      const idx = headers.findIndex((h, j) => j !== cBar && NORM(h).includes(k));
+      if (idx >= 0) { cCode = idx; break; }
     }
-    #printarea .c{text-align:center}
-    #printarea .big{font-size:15px;font-weight:bold;letter-spacing:.5px}
-    #printarea .sm{font-size:9.5px}
-    #printarea .r{display:flex;justify-content:space-between;gap:4px}
-    #printarea .r .val{white-space:nowrap}          /* il prezzo non va a capo */
-    #printarea .it{margin:1.5px 0}
-    #printarea .it .nm{word-break:break-word}       /* la descrizione va a capo */
-    #printarea .tot{font-size:13px;font-weight:bold}
-    #printarea hr{border:none;border-top:1px dashed #000;margin:4px 0}
-    #printarea .sp{height:6mm}                       /* spazio per lo strappo */
-  }
-  /* login */
-  #login{position:fixed;inset:0;z-index:100;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:20px}
-  .loginbox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:32px 30px;width:100%;max-width:360px;display:flex;flex-direction:column}
-  .loginsub{font-family:ui-sans-serif,sans-serif;font-size:13.5px;color:var(--muted);margin:0 0 20px}
-  .loginfield{font-family:ui-sans-serif,sans-serif;font-size:12.5px;color:var(--muted);display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
-  .loginfield input{border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:15px;background:#fff;color:var(--ink)}
-  .loginfield input:focus{outline:none;border-color:var(--brass)}
-  .loginerr{font-family:ui-sans-serif,sans-serif;font-size:13px;color:var(--alert);margin-top:10px;min-height:18px;text-align:center}
-  body.authed #login{display:none}
-  body:not(.authed) header,body:not(.authed) main{display:none}
-  #logout{font-family:ui-sans-serif,sans-serif;font-size:13px;border:1px solid transparent;background:transparent;padding:9px 14px;border-radius:8px}
-  #logout:hover{background:#f3e7e3}
-</style>
-</head>
-<body>
+    const cCat = pickCol(headers, ["categoria", "famiglia", "gruppo", "reparto"]);
+    // Danea: "Listino 1 (ivato)" è il prezzo di vendita
+    const cPrice = pickCol(headers, ["listino", "prezzo", "vendita", "ivato"]);
+    const cCost = pickCol(headers, ["costo", "acquisto", "carico"]);   // opzionale, spesso assente
+    const cStock = pickCol(headers, ["giacenza", "giac", "quantita", "qta", "disponibilit", "stock", "esistenza"]);
+    // Colonna "Nascosto?" di Danea: di solito la prima, senza intestazione (valori Sì/No)
+    const cHidden = headers.findIndex(h => { const n = NORM(h); return n === "nascosto" || n === ""; });
+    if (cDesc < 0) return res.status(400).json({ error: "Colonna Descrizione non trovata nel file" });
 
-<!-- LOGIN -->
-<div id="login">
-  <form id="loginform" class="loginbox">
-    <div class="brand" style="font-size:26px;margin-bottom:4px">Magazzino Uniformi<span class="dot">.</span></div>
-    <p class="loginsub">Accedi per continuare</p>
-    <label class="loginfield">Utente
-      <input id="li-user" autocomplete="username" value="admin" autofocus></label>
-    <label class="loginfield">Password
-      <input id="li-pass" type="password" autocomplete="current-password" value="admin"></label>
-    <button class="btn brass" type="submit" style="width:100%;margin-top:6px">Entra</button>
-    <div class="loginerr" id="li-err"></div>
-  </form>
-</div>
+    const summary = { created: 0, updated: 0, movements: 0, rows: 0, skipped: 0 };
 
-<header>
-  <div class="brand">Magazzino Uniformi<span class="dot">.</span></div>
-  <span class="conn"><span class="dotstat" id="cdot"></span><span id="ctext">connessione…</span></span>
-  <nav id="nav">
-    <button data-v="mag" class="on">Magazzino</button>
-    <button data-v="cassa">Cassa</button>
-    <button data-v="edit">Modifica</button>
-    <button data-v="import">Import Danea</button>
-    <button data-v="vendite">Vendite</button>
-    <button data-v="storico">Storico</button>
-    <button id="logout" title="Esci" style="color:var(--alert)">Esci</button>
-  </nav>
-</header>
+    await tx(async (c) => {
+      const batch = await nextBatch(c);
+      for (let i = hIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        const descr = (r[cDesc] ?? "").toString().trim();
+        // salta righe vuote, riga-totale (descrizione numerica senza codice) e prodotti nascosti
+        if (!descr) continue;
+        const code = cCode >= 0 ? (r[cCode] ?? "").toString().trim() : "";
+        if (!code && /^\d+$/.test(descr)) { continue; }   // riga-totale finale di Danea
+        if (cHidden >= 0 && isHidden(r[cHidden])) { summary.skipped++; continue; }
+        summary.rows++;
+        const cat = cCat >= 0 ? mainCategory(r[cCat]) : "Senza categoria";
+        const price = cPrice >= 0 ? parseNum(r[cPrice]) : 0;
+        const cost = cCost >= 0 ? parseNum(r[cCost]) : 0;
+        const fileStock = cStock >= 0 ? parseNum(r[cStock]) : 0;
 
-<main>
-  <!-- MAGAZZINO -->
-  <section id="mag" class="view on">
-    <div class="strip">
-      <div class="stat"><div class="k">ARTICOLI</div><div class="v" id="s-art">—</div></div>
-      <div class="stat"><div class="k">PEZZI</div><div class="v" id="s-pz">—</div></div>
-      <div class="stat mag"><div class="k">VALORE MAGAZZINO (a prezzo)</div><div class="v" id="s-val">—</div></div>
-      <div class="stat inc"><div class="k">INCASSO OGGI</div><div class="v" id="s-today">—</div></div>
-    </div>
-    <div class="bar">
-      <label class="search"><input id="m-search" placeholder="Cerca per descrizione o codice…"></label>
-      <select class="cat" id="m-cat"><option value="">Tutte le categorie</option></select>
-    </div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Codice</th><th>Descrizione</th><th>Categoria</th><th class="num">Prezzo</th><th class="num">Giac.</th><th class="num">Valore</th></tr></thead>
-      <tbody id="m-body"><tr><td colspan="6" class="empty">Caricamento…</td></tr></tbody>
-    </table></div>
-  </section>
+        let existing = null;
+        if (code) {
+          existing = (await c.query("SELECT * FROM products WHERE code=$1", [code])).rows[0] || null;
+        }
 
-  <!-- CASSA -->
-  <section id="cassa" class="view">
-    <div class="cassa">
-      <div class="prods">
-        <div class="bar" style="margin-bottom:0">
-          <label class="search"><input id="c-search" placeholder="Cerca articolo…"></label>
-          <select class="cat" id="c-cat"><option value="">Tutte</option></select>
-        </div>
-        <div class="grid" id="c-grid"></div>
-      </div>
-      <div class="receipt">
-        <h3>Scontrino <button class="clr" id="clearcart">svuota</button></h3>
-        <div class="lines" id="cart"></div>
-        <div class="tots">
-          <div class="totrow"><span class="lbl">Subtotale</span><span id="t-sub">€0,00</span></div>
-          <div class="totrow"><span class="lbl">Sconto</span><span><input type="number" id="t-disc" class="money-in" value="0" min="0" step="0.5"> €</span></div>
-          <div class="totrow big"><span>Totale</span><span id="t-tot">€0,00</span></div>
-          <div class="totrow"><span class="lbl">Contanti</span><span><input type="number" id="t-cash" class="money-in" placeholder="0,00" step="0.5"> €</span></div>
-          <div class="totrow"><span class="lbl">Resto</span><span class="resto" id="t-change">€0,00</span></div>
-          <button class="btn brass pay" id="pay" disabled>Incassa &amp; stampa</button>
-          <button class="btn ghost sm" id="reprint" style="width:100%;margin-top:8px;display:none">Rivedi ultimo scontrino</button>
-          <div class="printnote">Scontrino formattato per stampante termica 58mm. La prima volta, nella finestra di stampa scegli la termica, carta 58mm e margini “Nessuno”.</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- MODIFICA -->
-  <section id="edit" class="view">
-    <div class="bar">
-      <label class="search"><input id="e-search" placeholder="Cerca prodotto…"></label>
-      <select class="cat" id="e-cat"><option value="">Tutte le categorie</option></select>
-      <button class="btn sm brass" id="addprod">+ Nuovo prodotto</button>
-    </div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Codice</th><th>Descrizione</th><th>Categoria</th><th class="num">Costo €</th><th class="num">Prezzo €</th><th class="num">Giac.</th><th></th></tr></thead>
-      <tbody id="e-body"></tbody>
-    </table></div>
-    <div class="bar" style="margin-top:12px;font-family:ui-sans-serif,sans-serif;font-size:12px;color:var(--muted)">
-      Le modifiche si salvano nel database. Cambiare la giacenza qui crea un movimento di rettifica.
-    </div>
-  </section>
-
-  <!-- IMPORT -->
-  <section id="import" class="view">
-    <div class="panelbox">
-      <h2 style="margin:0 0 4px">Import da Danea</h2>
-      <p style="color:var(--muted);margin:0;font-family:ui-sans-serif,sans-serif;font-size:13.5px;line-height:1.5">
-        Carica l'export Excel. I prodotti vengono abbinati per <b>codice</b>: quelli esistenti si aggiornano, i nuovi si creano. Ogni variazione di giacenza genera un movimento nello storico.</p>
-      <div class="radio" id="importmode">
-        <label class="sel" data-mode="sync"><b>Allinea giacenze</b>La giacenza diventa quella del file (foto del magazzino Danea).</label>
-        <label data-mode="add"><b>Somma come carico</b>Le quantità del file si sommano alle giacenze attuali (nuovo arrivo merce).</label>
-      </div>
-      <div class="drop" id="drop">
-        <button class="btn brass" onclick="document.getElementById('impfile').click()">Scegli file Excel</button>
-        <input type="file" id="impfile" accept=".xlsx,.xls,.csv" style="display:none">
-        <div style="font-family:ui-sans-serif,sans-serif;font-size:12px;color:var(--muted);margin-top:12px">…o trascina qui il file</div>
-      </div>
-      <div class="importlog" id="importlog"></div>
-    </div>
-  </section>
-
-  <!-- VENDITE -->
-  <section id="vendite" class="view">
-    <div class="bar">
-      <span style="font-family:ui-sans-serif,sans-serif;font-size:13px;color:var(--muted)">Scontrini recenti — tocca per il dettaglio, stornare o ristampare.</span>
-      <button class="btn ghost sm" id="v-refresh" style="margin-left:auto">Aggiorna</button>
-    </div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>#</th><th>Data/ora</th><th class="num">Totale</th><th>Stato</th><th></th></tr></thead>
-      <tbody id="v-body"><tr><td colspan="5" class="empty">Caricamento…</td></tr></tbody>
-    </table></div>
-  </section>
-
-  <!-- STORICO -->
-  <section id="storico" class="view">
-    <div class="bar">
-      <select class="cat" id="h-kind">
-        <option value="">Tutti i movimenti</option>
-        <option value="vendita">Vendite</option>
-        <option value="import">Import Danea</option>
-        <option value="carico">Carichi</option>
-        <option value="rettifica">Rettifiche</option>
-        <option value="storno">Storni</option>
-      </select>
-      <button class="btn ghost sm" id="h-refresh">Aggiorna</button>
-    </div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Data/ora</th><th>Tipo</th><th>Articolo</th><th class="num">Qtà</th><th class="num">Giac. dopo</th><th>Nota</th></tr></thead>
-      <tbody id="h-body"><tr><td colspan="6" class="empty">Caricamento…</td></tr></tbody>
-    </table></div>
-  </section>
-</main>
-
-<div id="toast"></div>
-<div id="printarea"></div>
-
-<!-- DETTAGLIO / STORNO SCONTRINO -->
-<div id="saledlg">
-  <div class="preview-card" style="max-width:440px">
-    <div class="preview-head">
-      <span id="sd-title">Scontrino</span>
-      <button class="preview-x" id="sd-close" title="Chiudi">✕</button>
-    </div>
-    <div class="sd-scroll" id="sd-body"></div>
-    <div class="preview-actions" style="flex-direction:column;gap:8px">
-      <input id="sd-reason" class="sd-reason" placeholder="Motivo dello storno (facoltativo)">
-      <div style="display:flex;gap:10px;width:100%">
-        <button class="btn ghost" id="sd-reprint" style="flex:1">Ristampa</button>
-        <button class="btn" id="sd-void" style="flex:1;background:var(--alert)">Storna tutto</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ANTEPRIMA SCONTRINO -->
-<div id="preview">
-  <div class="preview-card">
-    <div class="preview-head">
-      <span>Anteprima scontrino</span>
-      <button class="preview-x" id="preview-close" title="Chiudi">✕</button>
-    </div>
-    <div class="preview-scroll">
-      <div class="preview-roll"><div class="preview-paper" id="preview-paper"></div></div>
-    </div>
-    <div class="preview-actions">
-      <button class="btn ghost" id="preview-dismiss">Chiudi</button>
-      <button class="btn brass" id="preview-print">🖶 Stampa</button>
-    </div>
-  </div>
-</div>
-
-<script>
-/* === CONFIG: dove sta il backend ===
-   Se servi il frontend dallo stesso server (Railway), lascia "" (stessa origine).
-   Se metti il frontend su GitHub Pages, incolla qui l'URL Railway, es:
-   const API = "https://magazzino-uniformi.up.railway.app"; */
-const API = "";
-
-const EUR = n => "€" + (Number(n)||0).toLocaleString("it-IT",{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtStock = n => (Number(n)||0).toLocaleString("it-IT",{maximumFractionDigits:2}); // 9,8 ma 2 resta 2
-const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-const esc = s => (s??"").toString().replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const NORM = s => (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");
-function toast(m,err){const t=$("#toast");t.textContent=m;t.classList.toggle("err",!!err);t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2200);}
-
-let TOKEN = localStorage.getItem("mu_token") || "";
-
-async function api(path,opts){
-  opts = opts || {};
-  opts.headers = Object.assign({}, opts.headers, TOKEN ? {Authorization:"Bearer "+TOKEN} : {});
-  const r=await fetch(API+path,opts);
-  if(r.status===401){ logout(); throw new Error("Sessione scaduta, rifai il login"); }
-  if(!r.ok){let e;try{e=(await r.json()).error;}catch{e=r.statusText;}throw new Error(e||"Errore");}
-  return r.json();
-}
-
-let products=[], cart={};
-
-/* ---------- data ---------- */
-async function loadProducts(){products=await api("/api/products");fillCats();}
-async function loadReport(){
-  try{const rp=await api("/api/report");
-    $("#s-art").textContent=rp.stock.articoli;
-    $("#s-pz").textContent=Math.round(rp.stock.pezzi).toLocaleString("it-IT");
-    $("#s-val").textContent=EUR(rp.stock.valore_vendita);
-    $("#s-today").textContent=EUR(rp.today.incasso);
-  }catch(e){}
-}
-function categories(){return [...new Set(products.map(p=>p.category))].sort((a,b)=>a.localeCompare(b,"it"));}
-function fillCats(){
-  const cats=categories();
-  ["#m-cat","#e-cat","#c-cat"].forEach(sel=>{
-    const el=$(sel),cur=el.value,first=el.querySelector("option").textContent;
-    el.innerHTML=`<option value="">${first}</option>`+cats.map(c=>`<option>${esc(c)}</option>`).join("");
-    el.value=cur;
-  });
-}
-
-/* ---------- health ---------- */
-async function ping(){
-  try{await api("/api/health");$("#cdot").className="dotstat ok";$("#ctext").textContent="database connesso";}
-  catch(e){$("#cdot").className="dotstat bad";$("#ctext").textContent="database non raggiungibile";}
-}
-
-/* ---------- magazzino ---------- */
-function renderMag(){
-  const q=NORM($("#m-search").value),cat=$("#m-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)));
-  const b=$("#m-body");
-  if(!list.length){b.innerHTML=`<tr><td colspan="6" class="empty">Nessun articolo.</td></tr>`;return;}
-  b.innerHTML=list.map(p=>`<tr>
-    <td>${esc(p.code)||"—"}</td><td>${esc(p.descr)}</td><td><span class="catpill">${esc(p.category)}</span></td>
-    <td class="num">${EUR(p.price)}</td>
-    <td class="num ${Number(p.stock)<=0?'lowstock':''}">${fmtStock(p.stock)}</td>
-    <td class="num">${EUR(p.stock*p.price)}</td></tr>`).join("");
-}
-
-/* ---------- modifica ---------- */
-function renderEdit(){
-  const q=NORM($("#e-search").value),cat=$("#e-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)));
-  const b=$("#e-body");
-  if(!list.length){b.innerHTML=`<tr><td colspan="7" class="empty">Nessun prodotto.</td></tr>`;return;}
-  b.innerHTML=list.map(p=>`<tr data-id="${p.id}">
-    <td><input class="edit-in txt" data-f="code" value="${esc(p.code)}" style="width:120px"></td>
-    <td><input class="edit-in txt" data-f="descr" value="${esc(p.descr)}"></td>
-    <td><input class="edit-in txt" data-f="category" value="${esc(p.category)}" style="width:150px" list="catlist"></td>
-    <td class="num"><input class="edit-in" data-f="cost" type="number" step="0.01" value="${p.cost}"></td>
-    <td class="num"><input class="edit-in" data-f="price" type="number" step="0.01" value="${p.price}"></td>
-    <td class="num"><input class="edit-in" data-f="stock" type="number" step="0.01" value="${p.stock}" style="width:70px"></td>
-    <td class="num"><button class="rowbtn" data-del="${p.id}">Elimina</button></td></tr>`).join("")
-    +`<datalist id="catlist">${categories().map(c=>`<option>${esc(c)}</option>`).join("")}</datalist>`;
-}
-async function saveRow(tr){
-  const id=tr.dataset.id, body={};
-  tr.querySelectorAll(".edit-in").forEach(i=>{
-    body[i.dataset.f]=(i.dataset.f==="cost"||i.dataset.f==="price"||i.dataset.f==="stock")?parseFloat(i.value)||0:i.value;
-  });
-  try{await api("/api/products/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    await loadProducts();await loadReport();
-  }catch(e){toast(e.message,true);}
-}
-
-/* ---------- cassa ---------- */
-function renderCassaProducts(){
-  const q=NORM($("#c-search").value),cat=$("#c-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)));
-  const g=$("#c-grid");
-  if(!list.length){g.innerHTML=`<div class="empty" style="grid-column:1/-1">Nessun articolo.</div>`;return;}
-  g.innerHTML=list.map(p=>{const out=Number(p.stock)<=0;
-    return `<button class="card" ${out?'disabled':''} data-add="${p.id}">
-      <div class="nm">${esc(p.descr)}</div><div class="st">${out?'esaurito':'giac. '+fmtStock(p.stock)}</div>
-      <div class="pr">${EUR(p.price)}</div></button>`;}).join("");
-}
-function renderCart(){
-  const c=$("#cart"),ids=Object.keys(cart);
-  if(!ids.length)c.innerHTML=`<div class="cartempty">Tocca un articolo per aggiungerlo</div>`;
-  else c.innerHTML=ids.map(id=>{const p=products.find(x=>x.id==id);if(!p)return"";const q=cart[id];
-    return `<div class="line"><div class="lnm">${esc(p.descr)}<div class="lpr">${EUR(p.price)}</div></div>
-      <div class="qtybox"><button data-dec="${id}">−</button><span>${q}</span><button data-inc="${id}">+</button></div>
-      <div class="llt">${EUR(p.price*q)}</div></div>`;}).join("");
-  const sub=ids.reduce((s,id)=>{const p=products.find(x=>x.id==id);return s+(p?p.price*cart[id]:0);},0);
-  let disc=parseFloat($("#t-disc").value)||0;if(disc<0)disc=0;if(disc>sub)disc=sub;
-  const tot=sub-disc,cash=parseFloat($("#t-cash").value),change=(!isNaN(cash))?cash-tot:0;
-  $("#t-sub").textContent=EUR(sub);$("#t-tot").textContent=EUR(tot);
-  const ch=$("#t-change");ch.textContent=EUR(change);ch.classList.toggle("neg",change<0);
-  $("#pay").disabled=ids.length===0;
-  return{sub,disc,tot,cash,change};
-}
-function addToCart(id){const p=products.find(x=>x.id==id);if(!p||Number(p.stock)<=0)return;
-  const n=cart[id]||0;if(n>=p.stock){toast("Giacenza insufficiente per "+p.descr,true);return;}cart[id]=n+1;renderCart();}
-async function checkout(){
-  const t=renderCart();if(!Object.keys(cart).length)return;
-  if(!isNaN(t.cash)&&t.change<0){toast("Contanti insufficienti.",true);return;}
-  const items=Object.keys(cart).map(id=>({id:Number(id),qty:cart[id]}));
-  const cash=isNaN(t.cash)?null:t.cash;
-  try{
-    const sale=await api("/api/sales",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({items,discount:t.disc,cash})});
-    showReceiptPreview(sale);
-    cart={};$("#t-disc").value=0;$("#t-cash").value="";renderCart();
-    await loadProducts();renderCassaProducts();await loadReport();
-    toast("Incasso registrato — "+EUR(sale.total));
-  }catch(e){toast(e.message,true);}
-}
-let lastSale=null;   // memorizza l'ultima vendita per ristampa
-function buildReceiptHTML(sale){
-  const now=new Date(sale.created_at||Date.now());
-  const data=now.toLocaleDateString("it-IT");
-  const ora=now.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-  const rows=sale.items.map(l=>{
-    const unit=Number(l.unit_price).toLocaleString("it-IT",{minimumFractionDigits:2,maximumFractionDigits:2});
-    return `<div class="it">
-      <div class="nm">${esc(l.descr)}</div>
-      <div class="r"><span class="sm">${fmtStock(l.qty)} x ${unit}</span><span class="val">${EUR(l.line_total)}</span></div>
-    </div>`;
-  }).join("");
-  return `
-    <div class="c big">MAGAZZINO UNIFORMI</div>
-    <div class="c sm">Scontrino non fiscale</div>
-    <div class="c sm">${data} ${ora} &middot; #${sale.id}</div>
-    <hr>${rows}<hr>
-    <div class="r"><span>Subtotale</span><span class="val">${EUR(sale.subtotal)}</span></div>
-    ${Number(sale.discount)>0?`<div class="r"><span>Sconto</span><span class="val">-${EUR(sale.discount)}</span></div>`:""}
-    <div class="r tot"><span>TOTALE</span><span class="val">${EUR(sale.total)}</span></div>
-    ${sale.cash!=null?`<div class="r sm"><span>Contanti</span><span class="val">${EUR(sale.cash)}</span></div>
-    <div class="r sm"><span>Resto</span><span class="val">${EUR(sale.change)}</span></div>`:""}
-    <hr>
-    <div class="c sm">Grazie e arrivederci</div>
-    <div class="sp"></div>`;
-}
-// Mostra l'anteprima a video (stesso markup della stampa)
-function showReceiptPreview(sale){
-  lastSale=sale;
-  const html=buildReceiptHTML(sale);
-  $("#preview-paper").innerHTML=html;   // anteprima visibile
-  $("#printarea").innerHTML=html;       // pronto per la stampa
-  $("#preview").classList.add("show");
-  $("#reprint").style.display="block";  // abilita "Rivedi ultimo scontrino"
-}
-function printReceipt(sale){
-  $("#printarea").innerHTML=buildReceiptHTML(sale);
-  window.print();
-}
-
-/* ---------- import ---------- */
-let importMode="sync";
-$("#importmode").addEventListener("click",e=>{const l=e.target.closest("label");if(!l)return;
-  importMode=l.dataset.mode;$$("#importmode label").forEach(x=>x.classList.remove("sel"));l.classList.add("sel");});
-const drop=$("#drop");
-["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot");}));
-["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("hot");}));
-drop.addEventListener("drop",e=>{if(e.dataTransfer.files[0])doImport(e.dataTransfer.files[0]);});
-$("#impfile").addEventListener("change",e=>{if(e.target.files[0])doImport(e.target.files[0]);});
-async function doImport(file){
-  const fd=new FormData();fd.append("file",file);fd.append("mode",importMode);
-  const log=$("#importlog");log.style.display="block";log.textContent="Import in corso…";
-  try{
-    const s=await api("/api/import",{method:"POST",body:fd});
-    log.innerHTML=`Import completato.<br>Righe lette: ${s.rows} · Nuovi prodotti: ${s.created} · Aggiornati: ${s.updated} · Movimenti registrati: ${s.movements}`;
-    await loadProducts();await loadReport();renderMag();
-    toast("Import completato.");
-  }catch(e){log.style.display="block";log.style.color="var(--alert)";log.textContent="Errore: "+e.message;toast(e.message,true);}
-}
-
-/* ---------- storico ---------- */
-async function renderStorico(){
-  const kind=$("#h-kind").value;
-  const b=$("#h-body");b.innerHTML=`<tr><td colspan="6" class="empty">Caricamento…</td></tr>`;
-  try{
-    const mv=await api("/api/movements?limit=300"+(kind?"&kind="+kind:""));
-    if(!mv.length){b.innerHTML=`<tr><td colspan="6" class="empty">Nessun movimento.</td></tr>`;return;}
-    b.innerHTML=mv.map(m=>{const d=new Date(m.created_at);
-      const q=Number(m.qty);
-      return `<tr>
-        <td>${d.toLocaleDateString("it-IT")} ${d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}</td>
-        <td><span class="kindpill k-${esc(m.kind)}">${esc(m.kind)}</span></td>
-        <td>${esc(m.descr)||"—"}${m.code?` <span style="color:var(--muted);font-size:12px">(${esc(m.code)})</span>`:""}</td>
-        <td class="num ${q>=0?'qplus':'qminus'}">${q>0?"+":""}${Math.round(q)}</td>
-        <td class="num">${m.stock_after!=null?Math.round(m.stock_after):"—"}</td>
-        <td style="font-family:ui-sans-serif,sans-serif;font-size:12.5px;color:var(--muted)">${esc(m.note)||""}</td>
-      </tr>`;}).join("");
-  }catch(e){b.innerHTML=`<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`;}
-}
-
-/* ---------- vendite / storno ---------- */
-let salesCache=[], currentSale=null;
-async function renderVendite(){
-  const b=$("#v-body");b.innerHTML=`<tr><td colspan="5" class="empty">Caricamento…</td></tr>`;
-  try{
-    salesCache=await api("/api/sales?limit=200");
-    if(!salesCache.length){b.innerHTML=`<tr><td colspan="5" class="empty">Nessuna vendita.</td></tr>`;return;}
-    b.innerHTML=salesCache.map(s=>{
-      const d=new Date(s.created_at);
-      const partial=!s.voided && s.items.some(i=>Number(i.qty_returned)>0);
-      const badge=s.voided?`<span class="badge void">stornato</span>`
-        :partial?`<span class="badge part">reso parziale</span>`
-        :`<span class="badge ok">valido</span>`;
-      return `<tr data-sale="${s.id}" style="cursor:pointer">
-        <td>#${s.id}</td>
-        <td>${d.toLocaleDateString("it-IT")} ${d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}</td>
-        <td class="num ${s.voided?'':''}" style="${s.voided?'text-decoration:line-through;color:var(--muted)':''}">${EUR(s.total)}</td>
-        <td>${badge}</td>
-        <td class="num"><button class="rowbtn" data-open="${s.id}">Apri</button></td>
-      </tr>`;}).join("");
-  }catch(e){b.innerHTML=`<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`;}
-}
-function openSale(id){
-  currentSale=salesCache.find(s=>s.id==id);if(!currentSale)return;
-  const s=currentSale;
-  $("#sd-title").textContent="Scontrino #"+s.id+(s.voided?" — STORNATO":"");
-  const rows=s.items.map(it=>{
-    const residua=Number(it.qty)-Number(it.qty_returned);
-    const resoTxt=Number(it.qty_returned)>0?` · reso ${fmtStock(it.qty_returned)}`:"";
-    return `<div class="sd-line">
-      <div class="nm">${esc(it.descr)}
-        <div class="meta">${fmtStock(it.qty)} × ${EUR(it.unit_price)}${resoTxt}</div></div>
-      <div class="lt">${EUR(residua*Number(it.unit_price))}</div>
-      <button class="sd-ret" data-ret="${it.id}" data-max="${residua}" ${(s.voided||residua<=0)?'disabled':''}>Rendi…</button>
-    </div>`;}).join("");
-  $("#sd-body").innerHTML=rows+`<div class="sd-tot"><span>Totale ${s.voided?'(stornato)':''}</span><span>${EUR(s.total)}</span></div>`
-    +(s.void_reason?`<div class="meta" style="margin-top:8px;color:var(--muted);font-family:ui-sans-serif,sans-serif;font-size:12px">Motivo: ${esc(s.void_reason)}</div>`:"");
-  $("#sd-void").disabled=s.voided;
-  $("#sd-void").style.opacity=s.voided?.5:1;
-  $("#sd-reason").value="";
-  $("#saledlg").classList.add("show");
-}
-function closeSaleDlg(){$("#saledlg").classList.remove("show");}
-async function voidSale(){
-  if(!currentSale||currentSale.voided)return;
-  if(!confirm("Stornare tutto lo scontrino #"+currentSale.id+"? La merce torna in magazzino."))return;
-  const reason=$("#sd-reason").value.trim();
-  try{
-    await api("/api/sales/"+currentSale.id+"/void",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({reason})});
-    toast("Scontrino #"+currentSale.id+" stornato.");
-    closeSaleDlg();await renderVendite();await loadProducts();await loadReport();renderMag();
-  }catch(e){toast(e.message,true);}
-}
-async function returnLine(itemId,max){
-  const q=prompt("Quanti pezzi vuoi rendere? (max "+fmtStock(max)+")","1");
-  if(q==null)return;
-  const qty=parseFloat((q||"").replace(",","."));
-  if(!(qty>0)){toast("Quantità non valida",true);return;}
-  const reason=$("#sd-reason").value.trim();
-  try{
-    await api("/api/sales/"+currentSale.id+"/return-line",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({itemId:Number(itemId),qty,reason})});
-    toast("Reso registrato.");
-    // ricarica e riapri lo stesso scontrino aggiornato
-    await renderVendite();currentSale=salesCache.find(s=>s.id==currentSale.id);
-    if(currentSale)openSale(currentSale.id);
-    await loadProducts();await loadReport();renderMag();
-  }catch(e){toast(e.message,true);}
-}
-function show(v){
-  $$(".view").forEach(s=>s.classList.remove("on"));$("#"+v).classList.add("on");
-  $$("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
-  if(v==="mag"){renderMag();loadReport();}
-  if(v==="edit")renderEdit();
-  if(v==="cassa"){renderCassaProducts();renderCart();}
-  if(v==="vendite")renderVendite();
-  if(v==="storico")renderStorico();
-}
-
-/* ---------- events ---------- */
-$("#nav").addEventListener("click",e=>{const b=e.target.closest("button");if(b)show(b.dataset.v);});
-$("#m-search").addEventListener("input",renderMag);$("#m-cat").addEventListener("change",renderMag);
-$("#e-search").addEventListener("input",renderEdit);$("#e-cat").addEventListener("change",renderEdit);
-$("#c-search").addEventListener("input",renderCassaProducts);$("#c-cat").addEventListener("change",renderCassaProducts);
-let saveTimer;
-$("#e-body").addEventListener("input",e=>{const tr=e.target.closest("tr[data-id]");if(!tr)return;
-  clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveRow(tr),700);});
-$("#e-body").addEventListener("click",async e=>{const del=e.target.closest("[data-del]");if(!del)return;
-  const id=del.dataset.del,p=products.find(x=>x.id==id);
-  if(confirm("Eliminare “"+p.descr+"”? (verrà archiviato, lo storico resta)")){
-    try{await api("/api/products/"+id,{method:"DELETE"});await loadProducts();renderEdit();renderMag();toast("Prodotto archiviato.");}
-    catch(err){toast(err.message,true);}}});
-$("#addprod").addEventListener("click",async()=>{
-  try{await api("/api/products",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({descr:"Nuovo prodotto",category:"Senza categoria"})});
-    await loadProducts();$("#e-search").value="";$("#e-cat").value="";renderEdit();
-    const f=$("#e-body input");if(f){f.focus();f.select();}}catch(e){toast(e.message,true);}});
-$("#c-grid").addEventListener("click",e=>{const b=e.target.closest("[data-add]");if(b)addToCart(b.dataset.add);});
-$("#cart").addEventListener("click",e=>{const inc=e.target.closest("[data-inc]"),dec=e.target.closest("[data-dec]");
-  if(inc)addToCart(inc.dataset.inc);if(dec){const id=dec.dataset.dec;cart[id]--;if(cart[id]<=0)delete cart[id];renderCart();}});
-$("#clearcart").addEventListener("click",()=>{cart={};$("#t-disc").value=0;$("#t-cash").value="";renderCart();});
-$("#t-disc").addEventListener("input",renderCart);$("#t-cash").addEventListener("input",renderCart);
-$("#pay").addEventListener("click",checkout);
-// anteprima scontrino
-function closePreview(){$("#preview").classList.remove("show");}
-$("#preview-print").addEventListener("click",()=>{ window.print(); });
-$("#preview-close").addEventListener("click",closePreview);
-$("#preview-dismiss").addEventListener("click",closePreview);
-$("#preview").addEventListener("click",e=>{ if(e.target.id==="preview") closePreview(); });
-$("#reprint").addEventListener("click",()=>{ if(lastSale) showReceiptPreview(lastSale); });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closePreview(); closeSaleDlg(); } });
-$("#h-kind").addEventListener("change",renderStorico);$("#h-refresh").addEventListener("click",renderStorico);
-// vendite / storno
-$("#v-refresh").addEventListener("click",renderVendite);
-$("#v-body").addEventListener("click",e=>{
-  const row=e.target.closest("[data-sale]"),open=e.target.closest("[data-open]");
-  const id=(open&&open.dataset.open)||(row&&row.dataset.sale);
-  if(id)openSale(id);
+        if (existing) {
+          const prevStock = Number(existing.stock);
+          const newStock = mode === "add" ? prevStock + fileStock : fileStock;
+          await c.query(
+            `UPDATE products SET descr=$1, category=$2, cost=$3, price=$4, stock=$5, archived=FALSE, updated_at=now()
+             WHERE id=$6`,
+            [descr, cat, cost, price, newStock, existing.id]);
+          const delta = newStock - prevStock;
+          if (delta !== 0) {
+            await c.query(
+              `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+               VALUES ($1,$2,$3,'import',$4,$5,$6,$7,$8,$9)`,
+              [existing.id, code, descr, delta, newStock, cost, price,
+               mode === "add" ? "Carico da Danea" : "Allineamento da Danea", batch]);
+            summary.movements++;
+          }
+          summary.updated++;
+        } else {
+          const p = (await c.query(
+            `INSERT INTO products (code, descr, category, cost, price, stock)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+            [code || null, descr, cat, cost, price, fileStock])).rows[0];
+          if (fileStock !== 0) {
+            await c.query(
+              `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+               VALUES ($1,$2,$3,'import',$4,$5,$6,$7,'Nuovo da Danea',$8)`,
+              [p.id, code, descr, fileStock, fileStock, cost, price, batch]);
+            summary.movements++;
+          }
+          summary.created++;
+        }
+      }
+    });
+    res.json(summary);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
-$("#sd-close").addEventListener("click",closeSaleDlg);
-$("#saledlg").addEventListener("click",e=>{if(e.target.id==="saledlg")closeSaleDlg();});
-$("#sd-void").addEventListener("click",voidSale);
-$("#sd-reprint").addEventListener("click",()=>{ if(currentSale)showReceiptPreview(currentSale); });
-$("#sd-body").addEventListener("click",e=>{const b=e.target.closest("[data-ret]");if(b&&!b.disabled)returnLine(b.dataset.ret,Number(b.dataset.max));});
 
-/* ---------- login / logout ---------- */
-function logout(){
-  TOKEN="";localStorage.removeItem("mu_token");
-  document.body.classList.remove("authed");
-  $("#li-pass").value="";$("#li-err").textContent="";
-}
-async function startApp(){
-  document.body.classList.add("authed");
-  await ping();
-  try{await loadProducts();await loadReport();renderMag();}
-  catch(e){toast("Impossibile caricare i dati: "+e.message,true);
-    $("#m-body").innerHTML=`<tr><td colspan="6" class="empty">Nessun dato. Vai su “Import Danea” per caricare il magazzino.</td></tr>`;}
-}
-$("#loginform").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const user=$("#li-user").value.trim(),pass=$("#li-pass").value;
-  $("#li-err").textContent="";
-  try{
-    const r=await fetch(API+"/api/login",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({user,pass})});
-    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||"Accesso negato");}
-    const d=await r.json();
-    TOKEN=d.token;localStorage.setItem("mu_token",TOKEN);
-    await startApp();
-  }catch(err){$("#li-err").textContent=err.message;}
+/* ---------------- vendita (cassa) ---------------- */
+app.post("/api/sales", async (req, res) => {
+  const { items = [], discount = 0, cash = null } = req.body;
+  if (!items.length) return res.status(400).json({ error: "Carrello vuoto" });
+  try {
+    const sale = await tx(async (c) => {
+      const batch = await nextBatch(c);
+      let subtotal = 0;
+      const resolved = [];
+      for (const it of items) {
+        const p = (await c.query("SELECT * FROM products WHERE id=$1", [it.id])).rows[0];
+        if (!p) throw new Error("Prodotto non trovato: " + it.id);
+        const qty = Number(it.qty);
+        if (qty <= 0) continue;
+        if (Number(p.stock) < qty) throw new Error("Giacenza insufficiente: " + p.descr);
+        const line = Number(p.price) * qty;
+        subtotal += line;
+        resolved.push({ p, qty, line });
+      }
+      let disc = Number(discount) || 0;
+      if (disc < 0) disc = 0;
+      if (disc > subtotal) disc = subtotal;
+      const total = subtotal - disc;
+      const change = cash != null ? Number(cash) - total : null;
+
+      const saleRow = (await c.query(
+        `INSERT INTO sales (subtotal, discount, total, cash, change)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [subtotal, disc, total, cash, change])).rows[0];
+
+      for (const { p, qty, line } of resolved) {
+        const newStock = Number(p.stock) - qty;
+        await c.query("UPDATE products SET stock=$1, updated_at=now() WHERE id=$2", [newStock, p.id]);
+        await c.query(
+          `INSERT INTO sale_items (sale_id, product_id, descr, qty, unit_price, line_total)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [saleRow.id, p.id, p.descr, qty, p.price, line]);
+        await c.query(
+          `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+           VALUES ($1,$2,$3,'vendita',$4,$5,$6,$7,$8,$9)`,
+          [p.id, p.code, p.descr, -qty, newStock, p.cost, p.price, "Scontrino #" + saleRow.id, batch]);
+      }
+      return { ...saleRow, items: resolved.map(r => ({ descr: r.p.descr, qty: r.qty, unit_price: r.p.price, line_total: r.line })) };
+    });
+    res.json(sale);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
-$("#logout").addEventListener("click",()=>{if(confirm("Uscire dall'account?"))logout();});
 
-/* ---------- boot ---------- */
-(async()=>{
-  setInterval(()=>{if(document.body.classList.contains("authed"))ping();},30000);
-  if(TOKEN){
-    // verifica il token esistente provando una chiamata protetta leggera
-    try{ await api("/api/report"); await startApp(); }
-    catch(e){ logout(); }
-  }
+/* ---------------- storico & report ---------------- */
+app.get("/api/movements", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  const kind = req.query.kind;
+  const params = [];
+  let where = "";
+  if (kind) { params.push(kind); where = "WHERE kind = $1"; }
+  params.push(limit);
+  const r = await query(
+    `SELECT * FROM movements ${where} ORDER BY created_at DESC LIMIT $${params.length}`, params);
+  res.json(r.rows);
+});
+
+app.get("/api/sales", async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const r = await query(
+    `SELECT s.*, COALESCE(json_agg(json_build_object(
+        'id', si.id, 'product_id', si.product_id, 'descr', si.descr,
+        'qty', si.qty, 'qty_returned', si.qty_returned,
+        'unit_price', si.unit_price, 'line_total', si.line_total
+      ) ORDER BY si.id) FILTER (WHERE si.id IS NOT NULL), '[]') AS items
+     FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id
+     GROUP BY s.id ORDER BY s.created_at DESC LIMIT $1`, [limit]);
+  res.json(r.rows);
+});
+
+/* ---------------- storno totale di uno scontrino ----------------
+   Rimette in giacenza tutta la merce non ancora resa, marca lo scontrino
+   come stornato e registra i movimenti. Non cancella nulla. */
+app.post("/api/sales/:id/void", async (req, res) => {
+  const id = Number(req.params.id);
+  const reason = (req.body && req.body.reason || "").toString().slice(0, 300);
+  try {
+    const out = await tx(async (c) => {
+      const sale = (await c.query("SELECT * FROM sales WHERE id=$1", [id])).rows[0];
+      if (!sale) throw new Error("Scontrino non trovato");
+      if (sale.voided) throw new Error("Scontrino già stornato");
+      const items = (await c.query("SELECT * FROM sale_items WHERE sale_id=$1", [id])).rows;
+      const batch = await nextBatch(c);
+      for (const it of items) {
+        const toReturn = Number(it.qty) - Number(it.qty_returned);
+        if (toReturn > 0 && it.product_id) {
+          const p = (await c.query("SELECT * FROM products WHERE id=$1", [it.product_id])).rows[0];
+          if (p) {
+            const newStock = Number(p.stock) + toReturn;
+            await c.query("UPDATE products SET stock=$1, updated_at=now() WHERE id=$2", [newStock, p.id]);
+            await c.query(
+              `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+               VALUES ($1,$2,$3,'storno',$4,$5,$6,$7,$8,$9)`,
+              [p.id, p.code, p.descr, toReturn, newStock, p.cost, p.price,
+               "Storno scontrino #" + id + (reason ? " · " + reason : ""), batch]);
+          }
+        }
+        await c.query("UPDATE sale_items SET qty_returned = qty WHERE id=$1", [it.id]);
+      }
+      const s = (await c.query(
+        `UPDATE sales SET voided=TRUE, void_reason=$1, voided_at=now() WHERE id=$2 RETURNING *`,
+        [reason || null, id])).rows[0];
+      return s;
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/* ---------------- storno parziale di una riga ----------------
+   Rende `qty` pezzi di una singola riga: torna in giacenza, aggiorna la riga
+   e ricalcola i totali dello scontrino. */
+app.post("/api/sales/:id/return-line", async (req, res) => {
+  const saleId = Number(req.params.id);
+  const { itemId, qty, reason = "" } = req.body || {};
+  const retQty = Number(qty);
+  if (!itemId || !(retQty > 0)) return res.status(400).json({ error: "Quantità da rendere non valida" });
+  try {
+    const out = await tx(async (c) => {
+      const sale = (await c.query("SELECT * FROM sales WHERE id=$1", [saleId])).rows[0];
+      if (!sale) throw new Error("Scontrino non trovato");
+      if (sale.voided) throw new Error("Scontrino già stornato");
+      const it = (await c.query("SELECT * FROM sale_items WHERE id=$1 AND sale_id=$2", [Number(itemId), saleId])).rows[0];
+      if (!it) throw new Error("Riga non trovata");
+      const residua = Number(it.qty) - Number(it.qty_returned);
+      if (retQty > residua) throw new Error("Puoi rendere al massimo " + residua + " pezzi di questa riga");
+
+      // rimetti in giacenza
+      const batch = await nextBatch(c);
+      if (it.product_id) {
+        const p = (await c.query("SELECT * FROM products WHERE id=$1", [it.product_id])).rows[0];
+        if (p) {
+          const newStock = Number(p.stock) + retQty;
+          await c.query("UPDATE products SET stock=$1, updated_at=now() WHERE id=$2", [newStock, p.id]);
+          await c.query(
+            `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+             VALUES ($1,$2,$3,'storno',$4,$5,$6,$7,$8,$9)`,
+            [p.id, p.code, p.descr, retQty, newStock, p.cost, p.price,
+             "Storno parziale scontrino #" + saleId + (reason ? " · " + reason : ""), batch]);
+        }
+      }
+      // aggiorna la riga
+      await c.query("UPDATE sale_items SET qty_returned = qty_returned + $1 WHERE id=$2", [retQty, it.id]);
+
+      // ricalcola i totali dello scontrino sulle quantità nette (qty - qty_returned)
+      const rows = (await c.query("SELECT qty, qty_returned, unit_price FROM sale_items WHERE sale_id=$1", [saleId])).rows;
+      let subtotal = 0;
+      for (const r of rows) subtotal += (Number(r.qty) - Number(r.qty_returned)) * Number(r.unit_price);
+      let discount = Number(sale.discount) || 0;
+      if (discount > subtotal) discount = subtotal;
+      const total = subtotal - discount;
+      // se tutte le righe sono rese, marca lo scontrino come stornato
+      const allReturned = rows.every(r => Number(r.qty_returned) >= Number(r.qty));
+      const s = (await c.query(
+        `UPDATE sales SET subtotal=$1, discount=$2, total=$3,
+           voided = $4, voided_at = CASE WHEN $4 THEN now() ELSE voided_at END
+         WHERE id=$5 RETURNING *`,
+        [subtotal, discount, total, allReturned, saleId])).rows[0];
+      return s;
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get("/api/report", async (_req, res) => {
+  const stock = (await query(
+    `SELECT COUNT(*)::int AS articoli,
+            COALESCE(SUM(stock),0) AS pezzi,
+            COALESCE(SUM(stock*cost),0) AS valore_costo,
+            COALESCE(SUM(stock*price),0) AS valore_vendita
+     FROM products WHERE archived=FALSE`)).rows[0];
+  const today = (await query(
+    `SELECT COALESCE(SUM(total),0) AS incasso, COUNT(*)::int AS scontrini
+     FROM sales WHERE voided=FALSE AND created_at::date = now()::date`)).rows[0];
+  const month = (await query(
+    `SELECT COALESCE(SUM(total),0) AS incasso, COUNT(*)::int AS scontrini
+     FROM sales WHERE voided=FALSE AND date_trunc('month',created_at)=date_trunc('month',now())`)).rows[0];
+  res.json({ stock, today, month });
+});
+
+/* ---------------- static frontend ---------------- */
+app.use(express.static(path.join(__dirname, "..", "public")));
+app.get("*", (_req, res) => res.sendFile(path.join(__dirname, "..", "public", "index.html")));
+
+const PORT = process.env.PORT || 3000;
+(async () => {
+  try { await initSchema(); }
+  catch (e) { console.error("Errore init schema:", e.message); }
+  app.listen(PORT, () => console.log("🚀 Magazzino Uniformi server su :" + PORT));
 })();
-</script>
-</body>
-</html>
