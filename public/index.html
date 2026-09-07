@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="it">
 <head>
@@ -107,6 +108,25 @@
   .preview-paper .sp{height:3mm}
   .preview-actions{display:flex;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
   .preview-actions .btn{flex:1}
+  /* dialog vendite/storno */
+  #saledlg{position:fixed;inset:0;z-index:85;background:rgba(28,35,33,.55);display:none;align-items:center;justify-content:center;padding:20px}
+  #saledlg.show{display:flex;animation:fade .18s ease}
+  .sd-scroll{overflow:auto;padding:16px 18px;max-height:56vh}
+  .sd-reason{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;font-family:ui-sans-serif,sans-serif}
+  .sd-line{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #efece3;font-family:ui-sans-serif,sans-serif}
+  .sd-line:last-child{border-bottom:none}
+  .sd-line .nm{flex:1;font-size:14px}
+  .sd-line .meta{font-size:12px;color:var(--muted)}
+  .sd-line .lt{font-size:14px;font-variant-numeric:tabular-nums;min-width:60px;text-align:right}
+  .sd-ret{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 9px;font-size:12px;color:var(--brass-dk)}
+  .sd-ret:hover{border-color:var(--brass);background:#fffdf8}
+  .sd-ret:disabled{opacity:.4;cursor:not-allowed}
+  .sd-tot{font-family:ui-sans-serif,sans-serif;font-size:15px;font-weight:700;display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line)}
+  .badge{font-family:ui-sans-serif,sans-serif;font-size:11px;padding:3px 9px;border-radius:20px}
+  .badge.ok{background:#eef0ea;color:var(--sage)}
+  .badge.void{background:#f3e7e3;color:var(--alert)}
+  .badge.part{background:#f0ead9;color:var(--brass-dk)}
+  .k-storno{background:#f3e7e3;color:var(--alert)}
   /* import */
   .panelbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);max-width:640px}
   .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:34px;text-align:center;margin:16px 0}
@@ -182,6 +202,7 @@
     <button data-v="cassa">Cassa</button>
     <button data-v="edit">Modifica</button>
     <button data-v="import">Import Danea</button>
+    <button data-v="vendite">Vendite</button>
     <button data-v="storico">Storico</button>
     <button id="logout" title="Esci" style="color:var(--alert)">Esci</button>
   </nav>
@@ -268,6 +289,18 @@
     </div>
   </section>
 
+  <!-- VENDITE -->
+  <section id="vendite" class="view">
+    <div class="bar">
+      <span style="font-family:ui-sans-serif,sans-serif;font-size:13px;color:var(--muted)">Scontrini recenti — tocca per il dettaglio, stornare o ristampare.</span>
+      <button class="btn ghost sm" id="v-refresh" style="margin-left:auto">Aggiorna</button>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>#</th><th>Data/ora</th><th class="num">Totale</th><th>Stato</th><th></th></tr></thead>
+      <tbody id="v-body"><tr><td colspan="5" class="empty">Caricamento…</td></tr></tbody>
+    </table></div>
+  </section>
+
   <!-- STORICO -->
   <section id="storico" class="view">
     <div class="bar">
@@ -277,6 +310,7 @@
         <option value="import">Import Danea</option>
         <option value="carico">Carichi</option>
         <option value="rettifica">Rettifiche</option>
+        <option value="storno">Storni</option>
       </select>
       <button class="btn ghost sm" id="h-refresh">Aggiorna</button>
     </div>
@@ -289,6 +323,24 @@
 
 <div id="toast"></div>
 <div id="printarea"></div>
+
+<!-- DETTAGLIO / STORNO SCONTRINO -->
+<div id="saledlg">
+  <div class="preview-card" style="max-width:440px">
+    <div class="preview-head">
+      <span id="sd-title">Scontrino</span>
+      <button class="preview-x" id="sd-close" title="Chiudi">✕</button>
+    </div>
+    <div class="sd-scroll" id="sd-body"></div>
+    <div class="preview-actions" style="flex-direction:column;gap:8px">
+      <input id="sd-reason" class="sd-reason" placeholder="Motivo dello storno (facoltativo)">
+      <div style="display:flex;gap:10px;width:100%">
+        <button class="btn ghost" id="sd-reprint" style="flex:1">Ristampa</button>
+        <button class="btn" id="sd-void" style="flex:1;background:var(--alert)">Storna tutto</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ANTEPRIMA SCONTRINO -->
 <div id="preview">
@@ -522,13 +574,83 @@ async function renderStorico(){
   }catch(e){b.innerHTML=`<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`;}
 }
 
-/* ---------- nav ---------- */
+/* ---------- vendite / storno ---------- */
+let salesCache=[], currentSale=null;
+async function renderVendite(){
+  const b=$("#v-body");b.innerHTML=`<tr><td colspan="5" class="empty">Caricamento…</td></tr>`;
+  try{
+    salesCache=await api("/api/sales?limit=200");
+    if(!salesCache.length){b.innerHTML=`<tr><td colspan="5" class="empty">Nessuna vendita.</td></tr>`;return;}
+    b.innerHTML=salesCache.map(s=>{
+      const d=new Date(s.created_at);
+      const partial=!s.voided && s.items.some(i=>Number(i.qty_returned)>0);
+      const badge=s.voided?`<span class="badge void">stornato</span>`
+        :partial?`<span class="badge part">reso parziale</span>`
+        :`<span class="badge ok">valido</span>`;
+      return `<tr data-sale="${s.id}" style="cursor:pointer">
+        <td>#${s.id}</td>
+        <td>${d.toLocaleDateString("it-IT")} ${d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}</td>
+        <td class="num ${s.voided?'':''}" style="${s.voided?'text-decoration:line-through;color:var(--muted)':''}">${EUR(s.total)}</td>
+        <td>${badge}</td>
+        <td class="num"><button class="rowbtn" data-open="${s.id}">Apri</button></td>
+      </tr>`;}).join("");
+  }catch(e){b.innerHTML=`<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`;}
+}
+function openSale(id){
+  currentSale=salesCache.find(s=>s.id==id);if(!currentSale)return;
+  const s=currentSale;
+  $("#sd-title").textContent="Scontrino #"+s.id+(s.voided?" — STORNATO":"");
+  const rows=s.items.map(it=>{
+    const residua=Number(it.qty)-Number(it.qty_returned);
+    const resoTxt=Number(it.qty_returned)>0?` · reso ${fmtStock(it.qty_returned)}`:"";
+    return `<div class="sd-line">
+      <div class="nm">${esc(it.descr)}
+        <div class="meta">${fmtStock(it.qty)} × ${EUR(it.unit_price)}${resoTxt}</div></div>
+      <div class="lt">${EUR(residua*Number(it.unit_price))}</div>
+      <button class="sd-ret" data-ret="${it.id}" data-max="${residua}" ${(s.voided||residua<=0)?'disabled':''}>Rendi…</button>
+    </div>`;}).join("");
+  $("#sd-body").innerHTML=rows+`<div class="sd-tot"><span>Totale ${s.voided?'(stornato)':''}</span><span>${EUR(s.total)}</span></div>`
+    +(s.void_reason?`<div class="meta" style="margin-top:8px;color:var(--muted);font-family:ui-sans-serif,sans-serif;font-size:12px">Motivo: ${esc(s.void_reason)}</div>`:"");
+  $("#sd-void").disabled=s.voided;
+  $("#sd-void").style.opacity=s.voided?.5:1;
+  $("#sd-reason").value="";
+  $("#saledlg").classList.add("show");
+}
+function closeSaleDlg(){$("#saledlg").classList.remove("show");}
+async function voidSale(){
+  if(!currentSale||currentSale.voided)return;
+  if(!confirm("Stornare tutto lo scontrino #"+currentSale.id+"? La merce torna in magazzino."))return;
+  const reason=$("#sd-reason").value.trim();
+  try{
+    await api("/api/sales/"+currentSale.id+"/void",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({reason})});
+    toast("Scontrino #"+currentSale.id+" stornato.");
+    closeSaleDlg();await renderVendite();await loadProducts();await loadReport();renderMag();
+  }catch(e){toast(e.message,true);}
+}
+async function returnLine(itemId,max){
+  const q=prompt("Quanti pezzi vuoi rendere? (max "+fmtStock(max)+")","1");
+  if(q==null)return;
+  const qty=parseFloat((q||"").replace(",","."));
+  if(!(qty>0)){toast("Quantità non valida",true);return;}
+  const reason=$("#sd-reason").value.trim();
+  try{
+    await api("/api/sales/"+currentSale.id+"/return-line",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({itemId:Number(itemId),qty,reason})});
+    toast("Reso registrato.");
+    // ricarica e riapri lo stesso scontrino aggiornato
+    await renderVendite();currentSale=salesCache.find(s=>s.id==currentSale.id);
+    if(currentSale)openSale(currentSale.id);
+    await loadProducts();await loadReport();renderMag();
+  }catch(e){toast(e.message,true);}
+}
 function show(v){
   $$(".view").forEach(s=>s.classList.remove("on"));$("#"+v).classList.add("on");
   $$("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
   if(v==="mag"){renderMag();loadReport();}
   if(v==="edit")renderEdit();
   if(v==="cassa"){renderCassaProducts();renderCart();}
+  if(v==="vendite")renderVendite();
   if(v==="storico")renderStorico();
 }
 
@@ -563,8 +685,20 @@ $("#preview-close").addEventListener("click",closePreview);
 $("#preview-dismiss").addEventListener("click",closePreview);
 $("#preview").addEventListener("click",e=>{ if(e.target.id==="preview") closePreview(); });
 $("#reprint").addEventListener("click",()=>{ if(lastSale) showReceiptPreview(lastSale); });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closePreview(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closePreview(); closeSaleDlg(); } });
 $("#h-kind").addEventListener("change",renderStorico);$("#h-refresh").addEventListener("click",renderStorico);
+// vendite / storno
+$("#v-refresh").addEventListener("click",renderVendite);
+$("#v-body").addEventListener("click",e=>{
+  const row=e.target.closest("[data-sale]"),open=e.target.closest("[data-open]");
+  const id=(open&&open.dataset.open)||(row&&row.dataset.sale);
+  if(id)openSale(id);
+});
+$("#sd-close").addEventListener("click",closeSaleDlg);
+$("#saledlg").addEventListener("click",e=>{if(e.target.id==="saledlg")closeSaleDlg();});
+$("#sd-void").addEventListener("click",voidSale);
+$("#sd-reprint").addEventListener("click",()=>{ if(currentSale)showReceiptPreview(currentSale); });
+$("#sd-body").addEventListener("click",e=>{const b=e.target.closest("[data-ret]");if(b&&!b.disabled)returnLine(b.dataset.ret,Number(b.dataset.max));});
 
 /* ---------- login / logout ---------- */
 function logout(){
