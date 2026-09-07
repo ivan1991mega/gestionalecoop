@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS sales (
   total      NUMERIC(12,2) NOT NULL DEFAULT 0,
   cash       NUMERIC(12,2),
   change     NUMERIC(12,2),
+  voided       BOOLEAN NOT NULL DEFAULT FALSE,   -- scontrino stornato del tutto
+  void_reason  TEXT,
+  voided_at    TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS sales_created_idx ON sales (created_at);
@@ -57,10 +60,17 @@ CREATE TABLE IF NOT EXISTS sale_items (
   sale_id    INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
   product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
   descr      TEXT,
-  qty        NUMERIC(12,2) NOT NULL,
+  qty        NUMERIC(12,2) NOT NULL,             -- quantità venduta originale
+  qty_returned NUMERIC(12,2) NOT NULL DEFAULT 0, -- quantità già resa (storno parziale)
   unit_price NUMERIC(12,2) NOT NULL,
   line_total NUMERIC(12,2) NOT NULL
 );
 
 -- Sequenza per batch_id (usata per raggruppare import/scontrini)
 CREATE SEQUENCE IF NOT EXISTS batch_seq START 1;
+
+-- Migrazioni idempotenti (per database già esistenti: aggiungono le colonne se mancano)
+ALTER TABLE sales      ADD COLUMN IF NOT EXISTS voided      BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sales      ADD COLUMN IF NOT EXISTS void_reason TEXT;
+ALTER TABLE sales      ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ;
+ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS qty_returned NUMERIC(12,2) NOT NULL DEFAULT 0;
