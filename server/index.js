@@ -332,11 +332,106 @@ app.get("/api/sales", async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 500);
   const r = await query(
     `SELECT s.*, COALESCE(json_agg(json_build_object(
-        'descr', si.descr, 'qty', si.qty, 'unit_price', si.unit_price, 'line_total', si.line_total
-      )) FILTER (WHERE si.id IS NOT NULL), '[]') AS items
+        'id', si.id, 'product_id', si.product_id, 'descr', si.descr,
+        'qty', si.qty, 'qty_returned', si.qty_returned,
+        'unit_price', si.unit_price, 'line_total', si.line_total
+      ) ORDER BY si.id) FILTER (WHERE si.id IS NOT NULL), '[]') AS items
      FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id
      GROUP BY s.id ORDER BY s.created_at DESC LIMIT $1`, [limit]);
   res.json(r.rows);
+});
+
+/* ---------------- storno totale di uno scontrino ----------------
+   Rimette in giacenza tutta la merce non ancora resa, marca lo scontrino
+   come stornato e registra i movimenti. Non cancella nulla. */
+app.post("/api/sales/:id/void", async (req, res) => {
+  const id = Number(req.params.id);
+  const reason = (req.body && req.body.reason || "").toString().slice(0, 300);
+  try {
+    const out = await tx(async (c) => {
+      const sale = (await c.query("SELECT * FROM sales WHERE id=$1", [id])).rows[0];
+      if (!sale) throw new Error("Scontrino non trovato");
+      if (sale.voided) throw new Error("Scontrino già stornato");
+      const items = (await c.query("SELECT * FROM sale_items WHERE sale_id=$1", [id])).rows;
+      const batch = await nextBatch(c);
+      for (const it of items) {
+        const toReturn = Number(it.qty) - Number(it.qty_returned);
+        if (toReturn > 0 && it.product_id) {
+          const p = (await c.query("SELECT * FROM products WHERE id=$1", [it.product_id])).rows[0];
+          if (p) {
+            const newStock = Number(p.stock) + toReturn;
+            await c.query("UPDATE products SET stock=$1, updated_at=now() WHERE id=$2", [newStock, p.id]);
+            await c.query(
+              `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+               VALUES ($1,$2,$3,'storno',$4,$5,$6,$7,$8,$9)`,
+              [p.id, p.code, p.descr, toReturn, newStock, p.cost, p.price,
+               "Storno scontrino #" + id + (reason ? " · " + reason : ""), batch]);
+          }
+        }
+        await c.query("UPDATE sale_items SET qty_returned = qty WHERE id=$1", [it.id]);
+      }
+      const s = (await c.query(
+        `UPDATE sales SET voided=TRUE, void_reason=$1, voided_at=now() WHERE id=$2 RETURNING *`,
+        [reason || null, id])).rows[0];
+      return s;
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/* ---------------- storno parziale di una riga ----------------
+   Rende `qty` pezzi di una singola riga: torna in giacenza, aggiorna la riga
+   e ricalcola i totali dello scontrino. */
+app.post("/api/sales/:id/return-line", async (req, res) => {
+  const saleId = Number(req.params.id);
+  const { itemId, qty, reason = "" } = req.body || {};
+  const retQty = Number(qty);
+  if (!itemId || !(retQty > 0)) return res.status(400).json({ error: "Quantità da rendere non valida" });
+  try {
+    const out = await tx(async (c) => {
+      const sale = (await c.query("SELECT * FROM sales WHERE id=$1", [saleId])).rows[0];
+      if (!sale) throw new Error("Scontrino non trovato");
+      if (sale.voided) throw new Error("Scontrino già stornato");
+      const it = (await c.query("SELECT * FROM sale_items WHERE id=$1 AND sale_id=$2", [Number(itemId), saleId])).rows[0];
+      if (!it) throw new Error("Riga non trovata");
+      const residua = Number(it.qty) - Number(it.qty_returned);
+      if (retQty > residua) throw new Error("Puoi rendere al massimo " + residua + " pezzi di questa riga");
+
+      // rimetti in giacenza
+      const batch = await nextBatch(c);
+      if (it.product_id) {
+        const p = (await c.query("SELECT * FROM products WHERE id=$1", [it.product_id])).rows[0];
+        if (p) {
+          const newStock = Number(p.stock) + retQty;
+          await c.query("UPDATE products SET stock=$1, updated_at=now() WHERE id=$2", [newStock, p.id]);
+          await c.query(
+            `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+             VALUES ($1,$2,$3,'storno',$4,$5,$6,$7,$8,$9)`,
+            [p.id, p.code, p.descr, retQty, newStock, p.cost, p.price,
+             "Storno parziale scontrino #" + saleId + (reason ? " · " + reason : ""), batch]);
+        }
+      }
+      // aggiorna la riga
+      await c.query("UPDATE sale_items SET qty_returned = qty_returned + $1 WHERE id=$2", [retQty, it.id]);
+
+      // ricalcola i totali dello scontrino sulle quantità nette (qty - qty_returned)
+      const rows = (await c.query("SELECT qty, qty_returned, unit_price FROM sale_items WHERE sale_id=$1", [saleId])).rows;
+      let subtotal = 0;
+      for (const r of rows) subtotal += (Number(r.qty) - Number(r.qty_returned)) * Number(r.unit_price);
+      let discount = Number(sale.discount) || 0;
+      if (discount > subtotal) discount = subtotal;
+      const total = subtotal - discount;
+      // se tutte le righe sono rese, marca lo scontrino come stornato
+      const allReturned = rows.every(r => Number(r.qty_returned) >= Number(r.qty));
+      const s = (await c.query(
+        `UPDATE sales SET subtotal=$1, discount=$2, total=$3,
+           voided = $4, voided_at = CASE WHEN $4 THEN now() ELSE voided_at END
+         WHERE id=$5 RETURNING *`,
+        [subtotal, discount, total, allReturned, saleId])).rows[0];
+      return s;
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.get("/api/report", async (_req, res) => {
@@ -348,10 +443,10 @@ app.get("/api/report", async (_req, res) => {
      FROM products WHERE archived=FALSE`)).rows[0];
   const today = (await query(
     `SELECT COALESCE(SUM(total),0) AS incasso, COUNT(*)::int AS scontrini
-     FROM sales WHERE created_at::date = now()::date`)).rows[0];
+     FROM sales WHERE voided=FALSE AND created_at::date = now()::date`)).rows[0];
   const month = (await query(
     `SELECT COALESCE(SUM(total),0) AS incasso, COUNT(*)::int AS scontrini
-     FROM sales WHERE date_trunc('month',created_at)=date_trunc('month',now())`)).rows[0];
+     FROM sales WHERE voided=FALSE AND date_trunc('month',created_at)=date_trunc('month',now())`)).rows[0];
   res.json({ stock, today, month });
 });
 
