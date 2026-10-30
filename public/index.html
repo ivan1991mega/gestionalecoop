@@ -95,17 +95,17 @@
   .preview-scroll{overflow:auto;padding:20px;background:#e8e5dd;display:flex;justify-content:center}
   .preview-roll{background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.25);border-radius:2px}
   /* carta 58mm resa a schermo, stesse regole della stampa */
-  .preview-paper{width:54mm;padding:2mm 3mm 4mm;font-family:"Courier New","Cascadia Mono",monospace;color:#000;font-size:11px;line-height:1.35;box-sizing:border-box}
+  .preview-paper{width:48mm;padding:1mm 1.5mm 3mm;font-family:"Courier New","Cascadia Mono",monospace;color:#000;font-size:10px;line-height:1.3;box-sizing:border-box}
   .preview-paper .c{text-align:center}
-  .preview-paper .big{font-size:15px;font-weight:bold;letter-spacing:.5px}
-  .preview-paper .sm{font-size:9.5px}
-  .preview-paper .r{display:flex;justify-content:space-between;gap:4px}
+  .preview-paper .big{font-size:13px;font-weight:bold;letter-spacing:.3px}
+  .preview-paper .sm{font-size:8.5px}
+  .preview-paper .r{display:flex;justify-content:space-between;gap:2px}
   .preview-paper .r .val{white-space:nowrap}
-  .preview-paper .it{margin:1.5px 0}
-  .preview-paper .it .nm{word-break:break-word}
-  .preview-paper .tot{font-size:13px;font-weight:bold}
-  .preview-paper hr{border:none;border-top:1px dashed #000;margin:4px 0}
-  .preview-paper .sp{height:3mm}
+  .preview-paper .it{margin:1px 0}
+  .preview-paper .it .nm{word-break:break-word;overflow-wrap:anywhere}
+  .preview-paper .tot{font-size:12px;font-weight:bold}
+  .preview-paper hr{border:none;border-top:1px dashed #000;margin:3px 0}
+  .preview-paper .sp{height:8mm}
   .preview-actions{display:flex;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
   .preview-actions .btn{flex:1}
   /* dialog vendite/storno */
@@ -141,28 +141,29 @@
   #toast.err{background:var(--alert)}
   #printarea{display:none}
   @media print{
-    /* Rotolo termico 58mm: area stampabile reale ~48mm, nessun margine */
+    /* Rotolo termico 58mm: area stampabile reale ~46-48mm, margini zero per non tagliare */
     @page{ size:58mm auto; margin:0; }
-    html,body{ margin:0!important; padding:0!important; background:#fff; }
+    html,body{ margin:0!important; padding:0!important; background:#fff; width:58mm; }
     body *{visibility:hidden}
     #printarea,#printarea *{visibility:visible}
     #printarea{
       display:block;position:absolute;left:0;top:0;
-      width:54mm;padding:2mm 3mm 4mm;
+      width:48mm;max-width:48mm;margin:0;padding:1mm 1.5mm 3mm;
       font-family:"Courier New","Cascadia Mono",monospace;
-      color:#000;font-size:11px;line-height:1.35;
+      color:#000;font-size:10px;line-height:1.3;
       -webkit-print-color-adjust:exact;print-color-adjust:exact;
+      box-sizing:border-box;overflow:hidden;
     }
     #printarea .c{text-align:center}
-    #printarea .big{font-size:15px;font-weight:bold;letter-spacing:.5px}
-    #printarea .sm{font-size:9.5px}
-    #printarea .r{display:flex;justify-content:space-between;gap:4px}
-    #printarea .r .val{white-space:nowrap}          /* il prezzo non va a capo */
-    #printarea .it{margin:1.5px 0}
-    #printarea .it .nm{word-break:break-word}       /* la descrizione va a capo */
-    #printarea .tot{font-size:13px;font-weight:bold}
-    #printarea hr{border:none;border-top:1px dashed #000;margin:4px 0}
-    #printarea .sp{height:6mm}                       /* spazio per lo strappo */
+    #printarea .big{font-size:13px;font-weight:bold;letter-spacing:.3px}
+    #printarea .sm{font-size:8.5px}
+    #printarea .r{display:flex;justify-content:space-between;gap:2px}
+    #printarea .r .val{white-space:nowrap}
+    #printarea .it{margin:1px 0}
+    #printarea .it .nm{word-break:break-word;overflow-wrap:anywhere}
+    #printarea .tot{font-size:12px;font-weight:bold}
+    #printarea hr{border:none;border-top:1px dashed #000;margin:3px 0}
+    #printarea .sp{height:8mm}                       /* spazio per lo strappo */
   }
   /* login */
   #login{position:fixed;inset:0;z-index:100;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:20px}
@@ -220,6 +221,7 @@
     <div class="bar">
       <label class="search"><input id="m-search" placeholder="Cerca per descrizione o codice…"></label>
       <select class="cat" id="m-cat"><option value="">Tutte le categorie</option></select>
+      <button class="btn ghost sm" id="export-xls" title="Scarica Excel del magazzino (modificabile e re-importabile)">⬇ Esporta Excel</button>
     </div>
     <div class="tablewrap"><table>
       <thead><tr><th>Codice</th><th>Descrizione</th><th>Categoria</th><th class="num">Prezzo</th><th class="num">Giac.</th><th class="num">Valore</th></tr></thead>
@@ -248,7 +250,7 @@
           <div class="totrow"><span class="lbl">Resto</span><span class="resto" id="t-change">€0,00</span></div>
           <button class="btn brass pay" id="pay" disabled>Incassa &amp; stampa</button>
           <button class="btn ghost sm" id="reprint" style="width:100%;margin-top:8px;display:none">Rivedi ultimo scontrino</button>
-          <div class="printnote">Scontrino formattato per stampante termica 58mm. La prima volta, nella finestra di stampa scegli la termica, carta 58mm e margini “Nessuno”.</div>
+          <div class="printnote">Scontrino per stampante termica 58mm. Nella finestra di stampa: stampante termica, formato carta 58mm (o Roll 58mm), margini <b>Nessuno</b>, scala 100%.</div>
         </div>
       </div>
     </div>
@@ -657,6 +659,31 @@ function show(v){
 /* ---------- events ---------- */
 $("#nav").addEventListener("click",e=>{const b=e.target.closest("button");if(b)show(b.dataset.v);});
 $("#m-search").addEventListener("input",renderMag);$("#m-cat").addEventListener("change",renderMag);
+$("#export-xls").addEventListener("click", async () => {
+  const btn = $("#export-xls");
+  btn.disabled = true; btn.textContent = "Scarico…";
+  try {
+    const r = await fetch(API + "/api/export", {
+      headers: TOKEN ? { Authorization: "Bearer " + TOKEN } : {}
+    });
+    if (r.status === 401) { logout(); throw new Error("Sessione scaduta"); }
+    if (!r.ok) throw new Error("Errore export");
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "magazzino-uniformi.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast("Excel scaricato");
+  } catch (e) {
+    toast(e.message || "Errore export", true);
+  } finally {
+    btn.disabled = false; btn.textContent = "⬇ Esporta Excel";
+  }
+});
 $("#e-search").addEventListener("input",renderEdit);$("#e-cat").addEventListener("change",renderEdit);
 $("#c-search").addEventListener("input",renderCassaProducts);$("#c-cat").addEventListener("change",renderCassaProducts);
 let saveTimer;
