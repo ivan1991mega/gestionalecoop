@@ -241,7 +241,7 @@
         <div class="grid" id="c-grid"></div>
       </div>
       <div class="receipt">
-        <h3>Scontrino <button class="clr" id="clearcart">svuota</button></h3>
+        <h3>Ricevuta <button class="clr" id="clearcart">svuota</button></h3>
         <div class="lines" id="cart"></div>
         <div class="tots">
           <div class="totrow"><span class="lbl">Subtotale</span><span id="t-sub">€0,00</span></div>
@@ -250,8 +250,8 @@
           <div class="totrow"><span class="lbl">Contanti</span><span><input type="number" id="t-cash" class="money-in" placeholder="0,00" step="0.5"> €</span></div>
           <div class="totrow"><span class="lbl">Resto</span><span class="resto" id="t-change">€0,00</span></div>
           <button class="btn brass pay" id="pay" disabled>Incassa &amp; stampa</button>
-          <button class="btn ghost sm" id="reprint" style="width:100%;margin-top:8px;display:none">Rivedi ultimo scontrino</button>
-          <div class="printnote">Scontrino per stampante termica 58mm. Nella finestra di stampa: stampante termica, formato carta 58mm (o Roll 58mm), margini <b>Nessuno</b>, scala 100%.</div>
+          <button class="btn ghost sm" id="reprint" style="width:100%;margin-top:8px;display:none">Rivedi ultima ricevuta</button>
+          <div class="printnote">Ricevuta non fiscale per stampante termica 58mm. Nella finestra di stampa: stampante termica, formato carta 58mm (o Roll 58mm), margini <b>Nessuno</b>, scala 100%.</div>
         </div>
       </div>
     </div>
@@ -331,7 +331,7 @@
 <div id="saledlg">
   <div class="preview-card" style="max-width:440px">
     <div class="preview-head">
-      <span id="sd-title">Scontrino</span>
+      <span id="sd-title">Ricevuta</span>
       <button class="preview-x" id="sd-close" title="Chiudi">✕</button>
     </div>
     <div class="sd-scroll" id="sd-body"></div>
@@ -349,7 +349,7 @@
 <div id="preview">
   <div class="preview-card">
     <div class="preview-head">
-      <span>Anteprima scontrino</span>
+      <span>Anteprima ricevuta</span>
       <button class="preview-x" id="preview-close" title="Chiudi">✕</button>
     </div>
     <div class="preview-scroll">
@@ -511,14 +511,14 @@ function buildReceiptHTML(sale){
   }).join("");
   return `
     <div class="c big">MAGAZZINO UNIFORMI</div>
-    <div class="c sm">Scontrino non fiscale</div>
+    <div class="c sm">Ricevuta non fiscale</div>
     <div class="c sm">${data} ${ora} &middot; #${sale.id}</div>
     <hr>${rows}<hr>
     <div class="r"><span>Subtotale</span><span class="val">${EUR(sale.subtotal)}</span></div>
     ${Number(sale.discount)>0?`<div class="r"><span>Sconto</span><span class="val">-${EUR(sale.discount)}</span></div>`:""}
     <div class="r tot"><span>TOTALE</span><span class="val">${EUR(sale.total)}</span></div>
-    ${sale.cash!=null?`<div class="r sm"><span>Contanti</span><span class="val">${EUR(sale.cash)}</span></div>
-    <div class="r sm"><span>Resto</span><span class="val">${EUR(sale.change)}</span></div>`:""}
+    ${sale.cash!=null?`<div class="r"><span>Contanti</span><span class="val">${EUR(sale.cash)}</span></div>
+    <div class="r"><span>Resto</span><span class="val">${EUR(sale.change)}</span></div>`:""}
     <hr>
     <div class="c sm">Grazie e arrivederci</div>
     <div class="sp"></div>`;
@@ -530,7 +530,7 @@ function showReceiptPreview(sale){
   $("#preview-paper").innerHTML=html;   // anteprima visibile
   $("#printarea").innerHTML=html;       // pronto per la stampa
   $("#preview").classList.add("show");
-  $("#reprint").style.display="block";  // abilita "Rivedi ultimo scontrino"
+  $("#reprint").style.display="block";  // abilita "Rivedi ultima ricevuta"
 }
 function printReceipt(sale){
   $("#printarea").innerHTML=buildReceiptHTML(sale);
@@ -587,7 +587,7 @@ async function renderVendite(){
     b.innerHTML=salesCache.map(s=>{
       const d=new Date(s.created_at);
       const partial=!s.voided && s.items.some(i=>Number(i.qty_returned)>0);
-      const badge=s.voided?`<span class="badge void">stornato</span>`
+      const badge=s.voided?`<span class="badge void">stornata</span>`
         :partial?`<span class="badge part">reso parziale</span>`
         :`<span class="badge ok">valido</span>`;
       return `<tr data-sale="${s.id}" style="cursor:pointer">
@@ -602,7 +602,7 @@ async function renderVendite(){
 function openSale(id){
   currentSale=salesCache.find(s=>s.id==id);if(!currentSale)return;
   const s=currentSale;
-  $("#sd-title").textContent="Scontrino #"+s.id+(s.voided?" — STORNATO":"");
+  $("#sd-title").textContent="Ricevuta #"+s.id+(s.voided?" — STORNATO":"");
   const rows=s.items.map(it=>{
     const residua=Number(it.qty)-Number(it.qty_returned);
     const resoTxt=Number(it.qty_returned)>0?` · reso ${fmtStock(it.qty_returned)}`:"";
@@ -612,7 +612,7 @@ function openSale(id){
       <div class="lt">${EUR(residua*Number(it.unit_price))}</div>
       <button class="sd-ret" data-ret="${it.id}" data-max="${residua}" ${(s.voided||residua<=0)?'disabled':''}>Rendi…</button>
     </div>`;}).join("");
-  $("#sd-body").innerHTML=rows+`<div class="sd-tot"><span>Totale ${s.voided?'(stornato)':''}</span><span>${EUR(s.total)}</span></div>`
+  $("#sd-body").innerHTML=rows+`<div class="sd-tot"><span>Totale ${s.voided?'(stornata)':''}</span><span>${EUR(s.total)}</span></div>`
     +(s.void_reason?`<div class="meta" style="margin-top:8px;color:var(--muted);font-family:ui-sans-serif,sans-serif;font-size:12px">Motivo: ${esc(s.void_reason)}</div>`:"");
   $("#sd-void").disabled=s.voided;
   $("#sd-void").style.opacity=s.voided?.5:1;
@@ -622,12 +622,12 @@ function openSale(id){
 function closeSaleDlg(){$("#saledlg").classList.remove("show");}
 async function voidSale(){
   if(!currentSale||currentSale.voided)return;
-  if(!confirm("Stornare tutto lo scontrino #"+currentSale.id+"? La merce torna in magazzino."))return;
+  if(!confirm("Stornare tutta la ricevuta #"+currentSale.id+"? La merce torna in magazzino."))return;
   const reason=$("#sd-reason").value.trim();
   try{
     await api("/api/sales/"+currentSale.id+"/void",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({reason})});
-    toast("Scontrino #"+currentSale.id+" stornato.");
+    toast("Ricevuta #"+currentSale.id+" stornata.");
     closeSaleDlg();await renderVendite();await loadProducts();await loadReport();renderMag();
   }catch(e){toast(e.message,true);}
 }
@@ -768,4 +768,5 @@ $("#logout").addEventListener("click",()=>{if(confirm("Uscire dall'account?"))lo
 </script>
 </body>
 </html>
+
 
