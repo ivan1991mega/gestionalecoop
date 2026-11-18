@@ -49,6 +49,23 @@
   .lowstock{color:var(--alert);font-weight:600}
   .edit-in{width:88px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;background:#fff}
   .edit-in.txt{text-align:left;width:100%}
+  .edit-in.descr{min-width:240px;font-size:15px;line-height:1.35}
+  /* Modifica su telefono: ogni prodotto diventa una scheda con tutti i campi visibili */
+  @media(max-width:640px){
+    .edit-in{font-size:16px}
+    #edit .tablewrap{overflow:visible;background:none;border:none;box-shadow:none}
+    #edit thead{display:none}
+    #edit table,#edit tbody,#edit tr,#edit td{display:block;width:100%}
+    #edit tbody tr{display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:12px;box-shadow:var(--shadow)}
+    #edit tbody tr:hover{background:var(--panel)}
+    #edit tbody td{border:none;padding:0;text-align:left;font-size:15px;min-width:0}
+    #edit td::before{content:attr(data-label);display:block;font-family:ui-sans-serif,sans-serif;font-size:11px;letter-spacing:.3px;color:var(--muted);margin-bottom:4px}
+    #edit td .edit-in{width:100%!important;min-width:0;text-align:left}
+    #edit td.descr-cell{grid-column:1/-1}
+    #edit td.actions{grid-column:1/-1;text-align:right}
+    #edit td.actions::before{content:none}
+    #edit td.num .edit-in{text-align:right}
+  }
   .rowbtn{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;font-size:12px;color:var(--muted)}
   .rowbtn:hover{border-color:var(--alert);color:var(--alert)}
   .empty{padding:36px;text-align:center;color:var(--muted)}
@@ -436,13 +453,13 @@ function renderEdit(){
   const b=$("#e-body");
   if(!list.length){b.innerHTML=`<tr><td colspan="7" class="empty">Nessun prodotto.</td></tr>`;return;}
   b.innerHTML=list.map(p=>`<tr data-id="${p.id}">
-    <td><input class="edit-in txt" data-f="code" value="${esc(p.code)}" style="width:120px"></td>
-    <td><input class="edit-in txt" data-f="descr" value="${esc(p.descr)}"></td>
-    <td><input class="edit-in txt" data-f="category" value="${esc(p.category)}" style="width:150px" list="catlist"></td>
-    <td class="num"><input class="edit-in" data-f="cost" type="number" step="0.01" value="${p.cost}"></td>
-    <td class="num"><input class="edit-in" data-f="price" type="number" step="0.01" value="${p.price}"></td>
-    <td class="num"><input class="edit-in" data-f="stock" type="number" step="0.01" value="${p.stock}" style="width:70px"></td>
-    <td class="num"><button class="rowbtn" data-del="${p.id}">Elimina</button></td></tr>`).join("")
+    <td data-label="Codice"><input class="edit-in txt" data-f="code" value="${esc(p.code)}" style="width:120px"></td>
+    <td data-label="Descrizione" class="descr-cell"><input class="edit-in txt descr" data-f="descr" value="${esc(p.descr)}" title="${esc(p.descr)}"></td>
+    <td data-label="Categoria"><input class="edit-in txt" data-f="category" value="${esc(p.category)}" style="width:150px" list="catlist"></td>
+    <td class="num" data-label="Costo €"><input class="edit-in" data-f="cost" type="number" step="0.01" value="${p.cost}"></td>
+    <td class="num" data-label="Prezzo €"><input class="edit-in" data-f="price" type="number" step="0.01" value="${p.price}"></td>
+    <td class="num" data-label="Giacenza"><input class="edit-in" data-f="stock" type="number" step="0.01" value="${p.stock}" style="width:70px"></td>
+    <td class="num actions"><button class="rowbtn" data-del="${p.id}">Elimina</button></td></tr>`).join("")
     +`<datalist id="catlist">${categories().map(c=>`<option>${esc(c)}</option>`).join("")}</datalist>`;
 }
 async function saveRow(tr){
