@@ -49,7 +49,8 @@
   .lowstock{color:var(--alert);font-weight:600}
   .edit-in{width:88px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;font-size:14px;text-align:right;font-variant-numeric:tabular-nums;background:#fff}
   .edit-in.txt{text-align:left;width:100%}
-  .edit-in.descr{min-width:240px;font-size:15px;line-height:1.35}
+  .edit-in.descr{min-width:380px;font-size:15px;line-height:1.35}
+  #edit td.descr-cell{min-width:380px}
   /* Modifica su telefono: ogni prodotto diventa una scheda con tutti i campi visibili */
   @media(max-width:640px){
     .edit-in{font-size:16px}
@@ -59,6 +60,7 @@
     #edit tbody tr{display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:12px;box-shadow:var(--shadow)}
     #edit tbody tr:hover{background:var(--panel)}
     #edit tbody td{border:none;padding:0;text-align:left;font-size:15px;min-width:0}
+    #edit tbody td.descr-cell{min-width:0}
     #edit td::before{content:attr(data-label);display:block;font-family:ui-sans-serif,sans-serif;font-size:11px;letter-spacing:.3px;color:var(--muted);margin-bottom:4px}
     #edit td .edit-in{width:100%!important;min-width:0;text-align:left}
     #edit td.descr-cell{grid-column:1/-1}
