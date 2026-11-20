@@ -126,7 +126,7 @@ Suggerimenti:
 ## Dettagli tecnici (facoltativi)
 
 - Il **valore di magazzino** e calcolato sul **prezzo di vendita** (il file Danea non ha il costo).
-- Le **categorie** usano solo il primo livello (es. `Distintivi » Bracciale` -> "Distintivi").
+- Le **categorie** si tengono per intero, con le sottocategorie (es. `Uniformi » Uomo » Alto`). Filtrando per "Uniformi" vedi anche tutte le sottocategorie.
 - Lo scontrino e **non fiscale** (promemoria interno).
 - Eliminare un prodotto lo **archivia**: sparisce dagli elenchi ma resta nello storico.
 

@@ -441,7 +441,7 @@ async function ping(){
 /* ---------- magazzino ---------- */
 function renderMag(){
   const q=NORM($("#m-search").value),cat=$("#m-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
+  const list=products.filter(p=>(!cat||p.category===cat||p.category.startsWith(cat+" »"))&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
   const b=$("#m-body");
   if(!list.length){b.innerHTML=`<tr><td colspan="6" class="empty">Nessun articolo.</td></tr>`;return;}
   b.innerHTML=list.map(p=>`<tr>
@@ -454,7 +454,7 @@ function renderMag(){
 /* ---------- modifica ---------- */
 function renderEdit(){
   const q=NORM($("#e-search").value),cat=$("#e-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
+  const list=products.filter(p=>(!cat||p.category===cat||p.category.startsWith(cat+" »"))&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
   const b=$("#e-body");
   if(!list.length){b.innerHTML=`<tr><td colspan="7" class="empty">Nessun prodotto.</td></tr>`;return;}
   b.innerHTML=list.map(p=>`<tr data-id="${p.id}">
@@ -480,7 +480,7 @@ async function saveRow(tr){
 /* ---------- cassa ---------- */
 function renderCassaProducts(){
   const q=NORM($("#c-search").value),cat=$("#c-cat").value;
-  const list=products.filter(p=>(!cat||p.category===cat)&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
+  const list=products.filter(p=>(!cat||p.category===cat||p.category.startsWith(cat+" »"))&&(!q||NORM(p.descr).includes(q)||NORM(p.code).includes(q)||NORM(p.parent).includes(q)));
   const g=$("#c-grid");
   if(!list.length){g.innerHTML=`<div class="empty" style="grid-column:1/-1">Nessun articolo.</div>`;return;}
   g.innerHTML=list.map(p=>{const out=Number(p.stock)<=0;

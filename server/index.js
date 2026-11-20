@@ -83,11 +83,11 @@ function parseNum(v) {
   }
   return parseFloat(s) || 0;            // solo punto -> già decimale (es. "9.8")
 }
-// Categoria annidata Danea "Principale » Sotto » ..." -> solo il primo livello
+// Categoria annidata "Principale » Sotto » ..." -> tenuta per intero (sottocategorie visibili)
 function mainCategory(v) {
   if (!v) return "Senza categoria";
-  const first = v.toString().split("»")[0].trim();
-  return first || "Senza categoria";
+  const parts = v.toString().split("»").map(x => x.trim()).filter(Boolean);
+  return parts.length ? parts.join(" » ") : "Senza categoria";
 }
 // La colonna senza intestazione di Danea è "Nascosto?" (valori Sì/No)
 function isHidden(v) {
