@@ -284,6 +284,7 @@
       <label class="search"><input id="e-search" placeholder="Cerca prodotto…"></label>
       <select class="cat" id="e-cat"><option value="">Tutte le categorie</option></select>
       <button class="btn sm brass" id="addprod">+ Nuovo prodotto</button>
+      <button class="btn sm ghost" id="resetmag" title="Archivia tutti i prodotti (lo storico resta)">Svuota magazzino</button>
     </div>
     <div class="tablewrap"><table>
       <thead><tr><th>Codice</th><th>Descrizione</th><th>Categoria</th><th class="num">Costo €</th><th class="num">Prezzo €</th><th class="num">Giac.</th><th></th></tr></thead>
@@ -681,6 +682,15 @@ function show(v){
 /* ---------- events ---------- */
 $("#nav").addEventListener("click",e=>{const b=e.target.closest("button");if(b)show(b.dataset.v);});
 $("#m-search").addEventListener("input",renderMag);$("#m-cat").addEventListener("change",renderMag);
+$("#resetmag").addEventListener("click", async () => {
+  const c = prompt("Archivia TUTTI i prodotti e azzera le giacenze. Lo storico resta.\nPer confermare scrivi ELIMINA TUTTO:");
+  if (c !== "ELIMINA TUTTO") { if (c !== null) toast("Conferma non valida.", true); return; }
+  try {
+    const r = await api("/api/reset", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({confirm:c})});
+    toast("Magazzino svuotato: " + r.archived + " prodotti archiviati.");
+    await loadProducts(); await loadReport(); renderMag(); renderEdit(); renderCassaProducts();
+  } catch (e) { toast(e.message, true); }
+});
 $("#export-xls").addEventListener("click", async () => {
   const btn = $("#export-xls");
   btn.disabled = true; btn.textContent = "Scarico…";

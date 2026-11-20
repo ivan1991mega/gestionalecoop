@@ -110,6 +110,28 @@ app.get("/api/health", async (_req, res) => {
 // Da qui in poi tutte le rotte /api richiedono login.
 app.use("/api", requireAuth);
 
+/* ---------------- svuota magazzino ----------------
+   Archivia tutti i prodotti attivi (restano nello storico) e azzera le giacenze.
+   Richiede la conferma esplicita "ELIMINA TUTTO". */
+app.post("/api/reset", async (req, res) => {
+  if ((req.body || {}).confirm !== "ELIMINA TUTTO") {
+    return res.status(400).json({ error: "Conferma non valida: scrivi ELIMINA TUTTO" });
+  }
+  try {
+    const out = await tx(async (c) => {
+      const batch = await nextBatch(c);
+      await c.query(
+        `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
+         SELECT id, code, descr, 'rettifica', -stock, 0, cost, price, 'Svuotamento magazzino', $1
+         FROM products WHERE archived = FALSE AND stock <> 0`, [batch]);
+      const r = await c.query(
+        "UPDATE products SET archived = TRUE, stock = 0, updated_at = now() WHERE archived = FALSE");
+      return r.rowCount;
+    });
+    res.json({ archived: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* ---------------- prodotti ---------------- */
 app.get("/api/products", async (_req, res) => {
   const r = await query(
