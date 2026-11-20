@@ -74,3 +74,8 @@ ALTER TABLE sales      ADD COLUMN IF NOT EXISTS voided      BOOLEAN NOT NULL DEF
 ALTER TABLE sales      ADD COLUMN IF NOT EXISTS void_reason TEXT;
 ALTER TABLE sales      ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ;
 ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS qty_returned NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+-- Varianti: articolo padre e taglia (colonne opzionali, idempotenti)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS parent TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS variant TEXT;
+CREATE INDEX IF NOT EXISTS products_parent_idx ON products (parent);

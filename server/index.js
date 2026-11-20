@@ -202,6 +202,9 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
     // Danea: "Listino 1 (ivato)" è il prezzo di vendita
     const cPrice = pickCol(headers, ["listino", "prezzo", "vendita", "ivato"]);
     const cCost = pickCol(headers, ["costo", "acquisto", "carico"]);   // opzionale, spesso assente
+    // Varianti: colonne opzionali "Articolo padre" e "Taglia"
+    const cParent = pickCol(headers, ["articolopadre", "padre"]);
+    const cVariant = pickCol(headers, ["taglia", "variante"]);
     const cStock = pickCol(headers, ["giacenza", "giac", "quantita", "qta", "disponibilit", "stock", "esistenza"]);
     // Colonna "Nascosto?" di Danea: di solito la prima, senza intestazione (valori Sì/No)
     const cHidden = headers.findIndex(h => { const n = NORM(h); return n === "nascosto" || n === ""; });
@@ -224,6 +227,8 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
         const price = cPrice >= 0 ? parseNum(r[cPrice]) : 0;
         const cost = cCost >= 0 ? parseNum(r[cCost]) : 0;
         const fileStock = cStock >= 0 ? parseNum(r[cStock]) : 0;
+        const parent = cParent >= 0 ? (r[cParent] ?? "").toString().trim() : "";
+        const variant = cVariant >= 0 ? (r[cVariant] ?? "").toString().trim() : "";
 
         let existing = null;
         if (code) {
@@ -234,9 +239,10 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
           const prevStock = Number(existing.stock);
           const newStock = mode === "add" ? prevStock + fileStock : fileStock;
           await c.query(
-            `UPDATE products SET descr=$1, category=$2, cost=$3, price=$4, stock=$5, archived=FALSE, updated_at=now()
+            `UPDATE products SET descr=$1, category=$2, cost=$3, price=$4, stock=$5, archived=FALSE, updated_at=now(),
+                                 parent=COALESCE($7, parent), variant=COALESCE($8, variant)
              WHERE id=$6`,
-            [descr, cat, cost, price, newStock, existing.id]);
+            [descr, cat, cost, price, newStock, existing.id, parent || null, variant || null]);
           const delta = newStock - prevStock;
           if (delta !== 0) {
             await c.query(
@@ -249,9 +255,9 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
           summary.updated++;
         } else {
           const p = (await c.query(
-            `INSERT INTO products (code, descr, category, cost, price, stock)
-             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-            [code || null, descr, cat, cost, price, fileStock])).rows[0];
+            `INSERT INTO products (code, descr, category, cost, price, stock, parent, variant)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+            [code || null, descr, cat, cost, price, fileStock, parent || null, variant || null])).rows[0];
           if (fileStock !== 0) {
             await c.query(
               `INSERT INTO movements (product_id, code, descr, kind, qty, stock_after, unit_cost, unit_price, note, batch_id)
@@ -454,7 +460,7 @@ app.get("/api/report", async (_req, res) => {
 app.get("/api/export", async (_req, res) => {
   try {
     const r = await query(
-      `SELECT code, descr, category, cost, price, stock
+      `SELECT code, descr, category, cost, price, stock, parent, variant
        FROM products WHERE archived = FALSE
        ORDER BY category, descr`);
     const rows = r.rows.map(p => ({
@@ -463,14 +469,16 @@ app.get("/api/export", async (_req, res) => {
       Categoria: p.category || "",
       Costo: Number(p.cost) || 0,
       Prezzo: Number(p.price) || 0,
-      Giacenza: Number(p.stock) || 0
+      Giacenza: Number(p.stock) || 0,
+      "Articolo padre": p.parent || "",
+      Taglia: p.variant || ""
     }));
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows, { header: ["Codice","Descrizione","Categoria","Costo","Prezzo","Giacenza"] });
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ["Codice","Descrizione","Categoria","Costo","Prezzo","Giacenza","Articolo padre","Taglia"] });
     // larghezze colonne comode
     ws["!cols"] = [
       { wch: 14 }, { wch: 42 }, { wch: 18 },
-      { wch: 10 }, { wch: 10 }, { wch: 10 }
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 28 }, { wch: 10 }
     ];
     XLSX.utils.book_append_sheet(wb, ws, "Magazzino");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });

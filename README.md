@@ -80,6 +80,16 @@ Di default l'accesso e admin / admin. Per cambiarlo:
 
 ---
 
+## Varianti (taglie)
+
+Ogni taglia è un prodotto con il suo codice. Per raggrupparle sotto l'articolo padre, nel file di import (o nell'export) aggiungi due colonne:
+- **Articolo padre**: il nome dell'articolo base (es. `CAMICIA GUIDA`), uguale per tutte le taglie
+- **Taglia**: la taglia (es. `XS`, `M`, `54`)
+
+Le colonne sono facoltative: se mancano, il prodotto resta com'è. Il campo Articolo padre è cercabile in Magazzino, Modifica e Cassa.
+
+---
+
 ## Usare l'import ogni volta
 
 - **Allinea giacenze** - la giacenza diventa quella del file. E la "foto" del magazzino da Danea:
